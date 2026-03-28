@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+:root {
+  --nh-bg: #040807;
+  --nh-surface: #0c1413;
+  --nh-surface-2: #111c1a;
+  --nh-border: #1f2e2c;
+  --nh-teal: #14b8a6;
+  --nh-teal-dim: #0d9488;
+  --nh-teal-glow: rgba(20, 184, 166, 0.12);
+  --nh-cta: #f97316;
+  --nh-cta-hover: #fb923c;
+  --nh-text: #ecfdf5;
+  --nh-muted: #7a9e99;
+  --nh-dim: #3d524f;
+  /* Muted brown-grey for feature bullets (reference UI) */
+  --nh-bullet-text: #8a7a6e;
+}
+
+@theme inline {
+  --color-nh-bg: var(--nh-bg);
+  --color-nh-surface: var(--nh-surface);
+  --color-nh-surface-2: var(--nh-surface-2);
+  --color-nh-border: var(--nh-border);
+  --color-nh-teal: var(--nh-teal);
+  --color-nh-teal-dim: var(--nh-teal-dim);
+  --color-nh-cta: var(--nh-cta);
+  --color-nh-cta-hover: var(--nh-cta-hover);
+  --color-nh-text: var(--nh-text);
+  --color-nh-muted: var(--nh-muted);
+  --color-nh-dim: var(--nh-dim);
+  --color-nh-bullet-text: var(--nh-bullet-text);
+  --font-sans: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+}
+
+@utility font-display {
+  font-family: var(--font-syne), ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  background-color: var(--nh-bg);
+  color: var(--nh-text);
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background-color: var(--nh-teal-glow);
+  color: var(--nh-text);
+}
