@@ -1,8 +1,5 @@
 @import "tailwindcss";
 
-/* Scan all app/source files for class names (Tailwind v4). Path is relative to this file. */
-@source "../**/*.{js,ts,jsx,tsx}";
-
 /*
  * Design tokens (also referenced by raw CSS below). Keep hex values in sync with @theme.
  */
@@ -96,4 +93,20 @@ body {
 ::selection {
   background-color: var(--nh-teal-glow);
   color: var(--nh-text);
+}
+
+/* Session AI note cards: entrance */
+@keyframes nh-ai-note-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nh-ai-note-enter {
+  animation: nh-ai-note-in 0.35s ease-out forwards;
 }

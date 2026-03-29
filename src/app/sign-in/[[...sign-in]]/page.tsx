@@ -13,7 +13,7 @@ export default function SignInPage() {
     >
       <SignIn
         appearance={clerkAppearance}
-        fallbackRedirectUrl="/"
+        fallbackRedirectUrl="/onboarding"
         signUpUrl="/sign-up"
       />
     </AuthPageShell>

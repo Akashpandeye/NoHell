@@ -1,11 +1,16 @@
 "use client";
 
-import { AuthNav } from "@/components/auth/AuthNav";
+import { useCallback, useEffect, useId, useState } from "react";
 
-import { AimMark } from "../brand/AimMark";
+import { useUser } from "@clerk/nextjs";
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useId, useState } from "react";
+import { useRouter } from "next/navigation";
+
+import { AuthNav } from "@/components/auth/AuthNav";
+import { UpgradeModal } from "@/components/billing/UpgradeModal";
+
+import { AimMark } from "../brand/AimMark";
 
 function extractVideoId(url: string): string | null {
   const m = url.match(/(?:v=|youtu\.be\/|embed\/)([^&?/\s]{11})/);
@@ -20,34 +25,120 @@ const featurePoints = [
 
 export function Landing() {
   const urlId = useId();
+  const goalId = useId();
+  const router = useRouter();
+  const { user, isLoaded } = useUser();
   const [url, setUrl] = useState("");
-  const [status, setStatus] = useState<"idle" | "error" | "ok">("idle");
+  const [goal, setGoal] = useState("");
+  const [status, setStatus] = useState<"idle" | "error">("idle");
   const [message, setMessage] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
+
+  useEffect(() => {
+    if (!isLoaded || !user?.id) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/user/onboarding");
+        if (!res.ok) return;
+        const data = (await res.json()) as { completed?: boolean };
+        if (!cancelled && data.completed === false) {
+          router.replace("/onboarding");
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, user?.id, router]);
 
   const onSubmit = useCallback(
-    (e: React.FormEvent<HTMLFormElement>) => {
+    async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       const trimmed = url.trim();
+      const goalTrimmed = goal.trim();
       if (!trimmed) {
         setStatus("error");
         setMessage("Paste a YouTube link to continue.");
         return;
       }
-      if (!extractVideoId(trimmed)) {
+      const videoId = extractVideoId(trimmed);
+      if (!videoId) {
         setStatus("error");
         setMessage("Use a valid YouTube watch or youtu.be URL.");
         return;
       }
-      setStatus("ok");
-      setMessage(
-        "Thanks — full sessions are on the way. Your link format looks good.",
-      );
+      if (!goalTrimmed) {
+        setStatus("error");
+        setMessage("Add a short learning goal for this session.");
+        return;
+      }
+      if (!isLoaded) {
+        setStatus("error");
+        setMessage("Please wait…");
+        return;
+      }
+      if (!user?.id) {
+        setStatus("error");
+        setMessage("Sign in to start a learning session.");
+        return;
+      }
+
+      setStarting(true);
+      setStatus("idle");
+      setMessage("");
+      try {
+        const res = await fetch("/api/session/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            videoId,
+            goal: goalTrimmed,
+            userId: user.id,
+          }),
+        });
+        const data = (await res.json()) as {
+          error?: string;
+          code?: string;
+          sessionId?: string;
+        };
+
+        if (res.status === 403 && data.code === "LIMIT_REACHED") {
+          setShowUpgrade(true);
+          setStatus("error");
+          setMessage("You’ve reached the free session limit.");
+          return;
+        }
+
+        if (!res.ok) {
+          setStatus("error");
+          setMessage(data.error ?? "Could not start session.");
+          return;
+        }
+
+        if (data.sessionId) {
+          router.push(`/session/${data.sessionId}`);
+          return;
+        }
+
+        setStatus("error");
+        setMessage("Unexpected response from server.");
+      } catch {
+        setStatus("error");
+        setMessage("Network error — try again.");
+      } finally {
+        setStarting(false);
+      }
     },
-    [url],
+    [url, goal, isLoaded, user, router],
   );
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden">
+      <UpgradeModal open={showUpgrade} onClose={() => setShowUpgrade(false)} />
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_55%_45%_at_50%_58%,var(--nh-teal-glow),transparent_72%)]"
@@ -108,31 +199,53 @@ export function Landing() {
             <label htmlFor={urlId} className="sr-only">
               YouTube tutorial URL
             </label>
-            <div className="flex flex-col gap-3 sm:flex-row sm:rounded-xl sm:border sm:border-nh-border sm:bg-nh-surface sm:p-1 sm:shadow-sm">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:rounded-xl sm:border sm:border-nh-border sm:bg-nh-surface sm:p-1 sm:shadow-sm">
+                <input
+                  id={urlId}
+                  name="url"
+                  type="url"
+                  inputMode="url"
+                  autoComplete="url"
+                  placeholder="https://www.youtube.com/watch?v=…"
+                  value={url}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    if (status !== "idle") {
+                      setStatus("idle");
+                      setMessage("");
+                    }
+                  }}
+                  className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:border-0 sm:bg-transparent sm:py-3.5"
+                />
+                <button
+                  type="submit"
+                  disabled={starting}
+                  className="font-display inline-flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-nh-cta px-6 text-sm font-bold text-neutral-950 shadow-sm transition-[background-color,transform] duration-200 hover:bg-nh-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-cta focus-visible:ring-offset-2 focus-visible:ring-offset-nh-bg active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60 sm:shrink-0 sm:px-7"
+                >
+                  {starting ? "Starting…" : "Start"}
+                  <ArrowRight className="h-4 w-4" strokeWidth={2} aria-hidden />
+                </button>
+              </div>
+              <label htmlFor={goalId} className="sr-only">
+                Learning goal
+              </label>
               <input
-                id={urlId}
-                name="url"
-                type="url"
-                inputMode="url"
-                autoComplete="url"
-                placeholder="https://www.youtube.com/watch?v=…"
-                value={url}
+                id={goalId}
+                name="goal"
+                type="text"
+                autoComplete="off"
+                placeholder="Your goal (e.g. build a REST API with Express)"
+                value={goal}
                 onChange={(e) => {
-                  setUrl(e.target.value);
+                  setGoal(e.target.value);
                   if (status !== "idle") {
                     setStatus("idle");
                     setMessage("");
                   }
                 }}
-                className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:border-0 sm:bg-transparent sm:py-3.5"
+                className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 text-left font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:px-4"
               />
-              <button
-                type="submit"
-                className="font-display inline-flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-nh-cta px-6 text-sm font-bold text-neutral-950 shadow-sm transition-[background-color,transform] duration-200 hover:bg-nh-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-cta focus-visible:ring-offset-2 focus-visible:ring-offset-nh-bg active:translate-y-px sm:shrink-0 sm:px-7"
-              >
-                Start
-                <ArrowRight className="h-4 w-4" strokeWidth={2} aria-hidden />
-              </button>
             </div>
             {message ? (
               <p
