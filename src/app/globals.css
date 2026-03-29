@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* Scan all app/source files for class names (Tailwind v4). Path is relative to this file. */
+@source "../**/*.{js,ts,jsx,tsx}";
+
+/*
+ * Design tokens (also referenced by raw CSS below). Keep hex values in sync with @theme.
+ */
 :root {
   --nh-bg: #040807;
   --nh-surface: #0c1413;
@@ -13,23 +19,26 @@
   --nh-text: #ecfdf5;
   --nh-muted: #7a9e99;
   --nh-dim: #3d524f;
-  /* Muted brown-grey for feature bullets (reference UI) */
   --nh-bullet-text: #8a7a6e;
 }
 
+/*
+ * Tailwind theme extension — use literal colors here so utilities (bg-nh-*, text-nh-*, etc.)
+ * resolve reliably. Avoid var() indirection inside @theme (can break tooling / ordering).
+ */
 @theme inline {
-  --color-nh-bg: var(--nh-bg);
-  --color-nh-surface: var(--nh-surface);
-  --color-nh-surface-2: var(--nh-surface-2);
-  --color-nh-border: var(--nh-border);
-  --color-nh-teal: var(--nh-teal);
-  --color-nh-teal-dim: var(--nh-teal-dim);
-  --color-nh-cta: var(--nh-cta);
-  --color-nh-cta-hover: var(--nh-cta-hover);
-  --color-nh-text: var(--nh-text);
-  --color-nh-muted: var(--nh-muted);
-  --color-nh-dim: var(--nh-dim);
-  --color-nh-bullet-text: var(--nh-bullet-text);
+  --color-nh-bg: #040807;
+  --color-nh-surface: #0c1413;
+  --color-nh-surface-2: #111c1a;
+  --color-nh-border: #1f2e2c;
+  --color-nh-teal: #14b8a6;
+  --color-nh-teal-dim: #0d9488;
+  --color-nh-cta: #f97316;
+  --color-nh-cta-hover: #fb923c;
+  --color-nh-text: #ecfdf5;
+  --color-nh-muted: #7a9e99;
+  --color-nh-dim: #3d524f;
+  --color-nh-bullet-text: #8a7a6e;
   --font-sans: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
@@ -52,6 +61,36 @@ body {
   background-color: var(--nh-bg);
   color: var(--nh-text);
   font-family: var(--font-sans);
+}
+
+/* Clerk: OAuth block buttons — white label + visible border */
+.cl-socialButtonsBlockButton,
+.cl-socialButtonsBlockButtonText {
+  color: #ffffff !important;
+}
+
+.cl-socialButtonsBlockButton {
+  border: 2px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 0.75rem;
+}
+
+.cl-socialButtonsBlockButton:hover {
+  border-color: color-mix(in srgb, var(--nh-teal) 45%, var(--nh-border)) !important;
+}
+
+/* Clerk UserButton: Manage account / Sign out */
+.cl-userButtonPopoverActionButton {
+  color: #ffffff !important;
+}
+
+.cl-userButtonPopoverActionButton svg {
+  color: #ffffff !important;
+  opacity: 1;
+}
+
+.cl-userButtonPopoverActionButtonIcon,
+.cl-userButtonPopoverActionButtonIconBox {
+  color: #ffffff !important;
 }
 
 ::selection {

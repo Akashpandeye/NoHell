@@ -28,6 +28,9 @@ export const metadata: Metadata = {
   title: "NoHell — Focus past tutorial hell",
   description:
     "A focused learning layer for coding tutorials: live notes, revision beats, and recall prompts while you watch — so you learn instead of binge.",
+  icons: {
+    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+  },
   openGraph: {
     title: "NoHell — Focus past tutorial hell",
     description:
@@ -41,13 +44,25 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider appearance={clerkAppearance} afterSignOutUrl="/">
-      <html
-        lang="en"
-        className={`${syne.variable} ${bricolage.variable} ${jetbrainsMono.variable} h-full scroll-smooth antialiased`}
+    <html
+      lang="en"
+      className={`${syne.variable} ${bricolage.variable} ${jetbrainsMono.variable} h-full scroll-smooth antialiased`}
+    >
+      {/* Inline fallback colors so first paint isn’t white if CSS is late (reload / sign-out). */}
+      <body
+        className="min-h-full flex flex-col bg-[#040807] font-sans text-[#ecfdf5] antialiased"
+        style={{
+          backgroundColor: "#040807",
+          color: "#ecfdf5",
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+        }}
       >
-        <body className="min-h-full flex flex-col font-sans">{children}</body>
-      </html>
-    </ClerkProvider>
+        <ClerkProvider appearance={clerkAppearance} afterSignOutUrl="/">
+          {children}
+        </ClerkProvider>
+      </body>
+    </html>
   );
 }

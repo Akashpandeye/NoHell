@@ -96,9 +96,7 @@ export function Landing() {
             </span>
           </h1>
           <p className="mt-5 max-w-md text-pretty font-mono text-[13px] leading-relaxed tracking-wide text-[#c9aa8c] sm:text-sm">
-            Paste any YouTube coding tutorial. Get AI notes, hourly
-            <br />
-            revision cards, and recall questions — as you watch.
+            Paste any Tutorial from YouTube . Get AI notes, hourly revision cards, and recall questions as you watch.
           </p>
 
           <form

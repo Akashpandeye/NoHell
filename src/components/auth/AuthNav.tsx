@@ -26,15 +26,7 @@ export function AuthNav() {
         </Link>
       </Show>
       <Show when="signed-in">
-        <UserButton
-          appearance={{
-            ...clerkAppearance,
-            elements: {
-              ...clerkAppearance.elements,
-              userButtonPopoverCard: "border border-[#1f2e2c] bg-[#0c1413]",
-            },
-          }}
-        />
+        <UserButton appearance={clerkAppearance} />
       </Show>
     </nav>
   );
