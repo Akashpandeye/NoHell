@@ -84,3 +84,28 @@ export interface Bookmark {
   label: string;
   createdAt: Date;
 }
+
+export type OnboardingLevel =
+  | "beginner"
+  | "junior"
+  | "self-taught"
+  | "switcher";
+
+export type SessionLength = "30" | "60" | "120" | "120+";
+
+export interface UserLearningProfile {
+  level: OnboardingLevel;
+  mediumTermGoal: string;
+  painPoints: string[];
+  sessionLength: SessionLength;
+  techFocus: string;
+  noteStyle: string;
+}
+
+export interface UserProfileDoc {
+  onboardingCompleted?: boolean;
+  onboardingCompletedAt?: Date | null;
+  profile?: UserLearningProfile;
+  sessions_used?: number;
+  plan?: "free" | "pro";
+}

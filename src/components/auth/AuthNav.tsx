@@ -11,12 +11,14 @@ export function AuthNav() {
       className="flex flex-shrink-0 items-center gap-2 sm:gap-3"
       aria-label="Account"
     >
-      <Link
-        href="/pricing"
-        className="cursor-pointer rounded-xl px-2 py-2 text-xs font-medium text-nh-muted transition-colors hover:text-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/50 sm:px-3"
-      >
-        Pricing
-      </Link>
+      <Show when="signed-in">
+        <Link
+          href="/pricing"
+          className="cursor-pointer rounded-xl px-2 py-2 text-xs font-medium text-nh-muted transition-colors hover:text-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/50 sm:px-3"
+        >
+          Pricing
+        </Link>
+      </Show>
       <Show when="signed-out">
         <Link
           href="/sign-up"

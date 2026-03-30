@@ -63,8 +63,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { upgradeToPro } = await import("@/lib/usage");
-    await upgradeToPro(userId);
+    const { serverUpgradeToPro } = await import("@/lib/server-firestore");
+    await serverUpgradeToPro(userId);
   } catch (e) {
     const message =
       e instanceof Error ? e.message : "Failed to upgrade account";

@@ -121,8 +121,8 @@ Return ONLY: {recall_questions:[{id, question, hint}]}`;
   }
 
   try {
-    const { updateSession } = await import("@/lib/firestore");
-    await updateSession(sessionId, { recallQuestions: recall_questions });
+    const { serverUpdateSession } = await import("@/lib/server-firestore");
+    await serverUpdateSession(sessionId, { recallQuestions: recall_questions });
   } catch (e) {
     const message =
       e instanceof Error ? e.message : "Failed to save recall questions";

@@ -12,7 +12,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { getUserUsage } = await import("@/lib/usage");
-  const usage = await getUserUsage(userId);
+  const { serverGetUserUsage } = await import("@/lib/server-firestore");
+  const usage = await serverGetUserUsage(userId);
   return NextResponse.json(usage);
 }

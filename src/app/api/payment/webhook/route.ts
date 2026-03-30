@@ -51,8 +51,8 @@ export async function POST(request: NextRequest) {
     const userId = notes?.userId ?? notes?.user_id;
     if (typeof userId === "string" && userId.trim()) {
       try {
-        const { upgradeToPro } = await import("@/lib/usage");
-        await upgradeToPro(userId.trim());
+        const { serverUpgradeToPro } = await import("@/lib/server-firestore");
+        await serverUpgradeToPro(userId.trim());
       } catch {
         /* still return 200 so Razorpay does not retry indefinitely; log server-side in production */
       }

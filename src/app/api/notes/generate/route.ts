@@ -94,10 +94,28 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let userLevel = "junior";
+  try {
+    const { serverGetSession, serverGetUserProfile } = await import(
+      "@/lib/server-firestore"
+    );
+    const session = await serverGetSession(sessionId);
+    if (session?.userId) {
+      const profile = await serverGetUserProfile(session.userId);
+      if (profile?.profile?.level) userLevel = profile.profile.level;
+    }
+  } catch {
+    /* optional personalization */
+  }
+
   const userPrompt = `Extract 1-2 key learning points worth noting from this coding 
 tutorial transcript segment. Skip filler, intros, and repetition. 
 Only note things a junior dev should write down.
 TRANSCRIPT: ${chunk}
+USER LEVEL: ${userLevel}
+Adjust explanation depth accordingly.
+For beginners explain every concept from scratch.
+For juniors skip obvious basics.
 Return ONLY: {notes:[{timestamp,type,content}]}
 Types allowed: concept, code, tip, warning
 If nothing valuable: {notes:[]}`;
@@ -140,7 +158,7 @@ If nothing valuable: {notes:[]}`;
   }
 
   const createdAt = new Date();
-  const { addNote } = await import("@/lib/firestore");
+  const { serverAddNote } = await import("@/lib/server-firestore");
 
   const saved: Note[] = [];
 
@@ -156,7 +174,7 @@ If nothing valuable: {notes:[]}`;
     const timestamp = parseNoteTimestamp(raw.timestamp, baseSeconds);
 
     try {
-      const id = await addNote({
+      const id = await serverAddNote({
         sessionId,
         timestamp,
         type,

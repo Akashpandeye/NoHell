@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useId, useState } from "react";
 
 import { useUser } from "@clerk/nextjs";
 import { ArrowRight } from "lucide-react";
@@ -35,26 +35,6 @@ export function Landing() {
   const [starting, setStarting] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
 
-  useEffect(() => {
-    if (!isLoaded || !user?.id) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch("/api/user/onboarding");
-        if (!res.ok) return;
-        const data = (await res.json()) as { completed?: boolean };
-        if (!cancelled && data.completed === false) {
-          router.replace("/onboarding");
-        }
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isLoaded, user?.id, router]);
-
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -71,19 +51,18 @@ export function Landing() {
         setMessage("Use a valid YouTube watch or youtu.be URL.");
         return;
       }
-      if (!goalTrimmed) {
-        setStatus("error");
-        setMessage("Add a short learning goal for this session.");
-        return;
-      }
       if (!isLoaded) {
         setStatus("error");
         setMessage("Please wait…");
         return;
       }
       if (!user?.id) {
+        router.push(`/sign-up?url=${encodeURIComponent(trimmed)}`);
+        return;
+      }
+      if (!goalTrimmed) {
         setStatus("error");
-        setMessage("Sign in to start a learning session.");
+        setMessage("Add a short learning goal for this session.");
         return;
       }
 
@@ -227,25 +206,29 @@ export function Landing() {
                   <ArrowRight className="h-4 w-4" strokeWidth={2} aria-hidden />
                 </button>
               </div>
-              <label htmlFor={goalId} className="sr-only">
-                Learning goal
-              </label>
-              <input
-                id={goalId}
-                name="goal"
-                type="text"
-                autoComplete="off"
-                placeholder="Your goal (e.g. build a REST API with Express)"
-                value={goal}
-                onChange={(e) => {
-                  setGoal(e.target.value);
-                  if (status !== "idle") {
-                    setStatus("idle");
-                    setMessage("");
-                  }
-                }}
-                className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 text-left font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:px-4"
-              />
+              {user?.id ? (
+                <>
+                  <label htmlFor={goalId} className="sr-only">
+                    Learning goal
+                  </label>
+                  <input
+                    id={goalId}
+                    name="goal"
+                    type="text"
+                    autoComplete="off"
+                    placeholder="Your goal (e.g. build a REST API with Express)"
+                    value={goal}
+                    onChange={(e) => {
+                      setGoal(e.target.value);
+                      if (status !== "idle") {
+                        setStatus("idle");
+                        setMessage("");
+                      }
+                    }}
+                    className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 text-left font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:px-4"
+                  />
+                </>
+              ) : null}
             </div>
             {message ? (
               <p

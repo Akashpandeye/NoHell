@@ -104,8 +104,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { canStartSession, incrementUsage } = await import("@/lib/usage");
-  const allowed = await canStartSession(userId);
+  const { serverCanStartSession, serverIncrementUsage } = await import(
+    "@/lib/server-firestore"
+  );
+  const allowed = await serverCanStartSession(userId);
   if (!allowed) {
     return NextResponse.json(
       {
@@ -161,10 +163,25 @@ export async function POST(request: NextRequest) {
 
   const chunked: TranscriptChunk[] = splitTranscriptByTime(transcript, 5);
   const preview = firstNWordsFromTranscript(transcript, 500);
+  let userLevel = "junior";
+  let techFocus = "general";
+  try {
+    const { serverGetUserProfile } = await import("@/lib/server-firestore");
+    const profile = await serverGetUserProfile(userId);
+    if (profile?.profile?.level) userLevel = profile.profile.level;
+    if (profile?.profile?.techFocus) techFocus = profile.profile.techFocus;
+  } catch {
+    /* optional personalization */
+  }
 
   const userPrompt = `Break this learning goal into 3-5 checkpoints for this coding tutorial.
 GOAL: ${goal}
 TRANSCRIPT_PREVIEW: ${preview}
+USER LEVEL: ${userLevel}
+TECH FOCUS: ${techFocus}
+Adjust checkpoint difficulty and language accordingly.
+For beginners use simpler language and smaller steps.
+For juniors assume basic syntax knowledge.
 Return ONLY: {checkpoints:[{id,title,description,estimated_minute}]}`;
 
   let checkpoints: Checkpoint[];
@@ -206,8 +223,8 @@ Return ONLY: {checkpoints:[{id,title,description,estimated_minute}]}`;
 
   let sessionId: string;
   try {
-    const { createSession } = await import("@/lib/firestore");
-    sessionId = await createSession({
+    const { serverCreateSession } = await import("@/lib/server-firestore");
+    sessionId = await serverCreateSession({
       userId,
       videoId,
       videoTitle,
@@ -225,7 +242,7 @@ Return ONLY: {checkpoints:[{id,title,description,estimated_minute}]}`;
   }
 
   try {
-    await incrementUsage(userId);
+    await serverIncrementUsage(userId);
   } catch {
     /* usage increment failed — session still created */
   }

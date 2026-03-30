@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 export default function PricingPage() {
-  const { user, isLoaded } = useUser();
+  const { user } = useUser();
   const router = useRouter();
   const [plan, setPlan] = useState<"free" | "pro" | null>(null);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
@@ -92,11 +92,10 @@ export default function PricingPage() {
 
       <main className="relative z-10 mx-auto max-w-5xl px-4 py-14 sm:px-6 lg:px-8">
         <h1 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">
-          Pricing
+          Choose your path
         </h1>
         <p className="mt-2 max-w-xl text-sm text-nh-muted">
-          Start free, upgrade when you&apos;re ready for unlimited learning
-          sessions.
+          You&apos;re all set. Start with free trial or unlock Pro now.
         </p>
 
         {toast ? (
@@ -106,69 +105,57 @@ export default function PricingPage() {
         ) : null}
 
         <div className="mt-10 grid gap-6 md:grid-cols-2">
-          <section className="relative flex flex-col border border-nh-border bg-nh-surface p-6">
-            {isLoaded && user && plan === "free" ? (
-              <span className="absolute right-4 top-4 rounded-full border border-nh-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-nh-muted">
-                Current plan
-              </span>
-            ) : null}
-            <h2 className="font-display text-lg font-bold">Free</h2>
-            <p className="mt-2 font-mono text-3xl font-semibold text-nh-text">
-              $0
-            </p>
-            <ul className="mt-6 space-y-2 text-sm text-nh-muted">
-              <li>5 sessions / month</li>
-              <li>Basic AI notes</li>
-              <li>No export</li>
-            </ul>
-            <Link
-              href="/"
-              className="mt-8 inline-block rounded-xl border border-nh-border px-4 py-2 text-center text-sm font-medium hover:border-nh-teal/50"
-            >
-              {user ? "Dashboard" : "Get started"}
-            </Link>
-          </section>
-
           <section className="relative flex flex-col border-2 border-nh-cta/60 bg-nh-surface-2 p-6 shadow-[0_0_40px_rgba(249,115,22,0.08)]">
-            {isLoaded && user && isPro ? (
-              <span className="absolute right-4 top-4 rounded-full border border-nh-cta/50 bg-nh-cta/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-nh-cta">
-                Current plan
-              </span>
-            ) : null}
-            <h2 className="font-display text-lg font-bold text-nh-cta">Pro</h2>
+            <h2 className="font-display text-xl font-bold text-nh-cta">
+              Buy Pro plan
+            </h2>
             <p className="mt-2 font-mono text-3xl font-semibold text-nh-text">
               ${PRO_PRICE_USD}
               <span className="text-base font-normal text-nh-muted">/month</span>
             </p>
-            <ul className="mt-6 space-y-2 text-sm text-nh-text">
-              <li>Unlimited sessions</li>
-              <li>Full AI notes + code skeletons</li>
-              <li>Export to Markdown</li>
-              <li>Revision card history</li>
-            </ul>
+            <p className="mt-4 text-sm text-nh-text">
+              Unlimited sessions, full notes export, and revision history.
+            </p>
             {user ? (
-              isPro ? (
-                <p className="mt-8 text-sm text-nh-muted">
-                  You&apos;re on Pro — thank you!
-                </p>
-              ) : (
-                <button
-                  type="button"
-                  disabled={checkoutBusy}
-                  className="mt-8 w-full rounded-xl bg-nh-cta py-3 text-sm font-bold text-neutral-950 hover:bg-nh-cta-hover disabled:opacity-50"
-                  onClick={() => void onUpgrade()}
-                >
-                  {checkoutBusy ? "Opening…" : "Upgrade to Pro"}
-                </button>
-              )
+              <button
+                type="button"
+                disabled={checkoutBusy || isPro}
+                className="mt-8 w-full rounded-xl bg-nh-cta py-3 text-sm font-bold text-neutral-950 hover:bg-nh-cta-hover disabled:opacity-50"
+                onClick={() => void onUpgrade()}
+              >
+                {isPro
+                  ? "You're already on Pro"
+                  : checkoutBusy
+                    ? "Opening…"
+                    : "Buy Pro plan"}
+              </button>
             ) : (
               <Link
                 href="/sign-up"
                 className="mt-8 inline-block w-full rounded-xl bg-nh-cta py-3 text-center text-sm font-bold text-neutral-950 hover:bg-nh-cta-hover"
               >
-                Sign up to upgrade
+                Sign up to buy Pro
               </Link>
             )}
+          </section>
+
+          <section className="relative flex flex-col border border-nh-border bg-nh-surface p-6">
+            <h2 className="font-display text-xl font-bold text-nh-text">
+              Continue with free trial
+            </h2>
+            <p className="mt-2 text-sm text-nh-muted">
+              Start now with the free plan and upgrade later anytime.
+            </p>
+            <ul className="mt-6 space-y-2 text-sm text-nh-muted">
+              <li>5 sessions / month</li>
+              <li>Basic AI notes</li>
+            </ul>
+            <Link
+              href="/"
+              className="mt-8 inline-block rounded-xl border border-nh-border px-4 py-2 text-center text-sm font-medium hover:border-nh-teal/50"
+            >
+              Continue with free trial
+            </Link>
           </section>
         </div>
       </main>

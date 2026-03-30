@@ -3,6 +3,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { Bricolage_Grotesque, JetBrains_Mono, Syne } from "next/font/google";
 
 import { clerkAppearance } from "@/lib/clerk-appearance";
+import { OnboardingGate } from "@/components/auth/OnboardingGate";
 
 import "./globals.css";
 
@@ -60,7 +61,7 @@ export default function RootLayout({
         }}
       >
         <ClerkProvider appearance={clerkAppearance} afterSignOutUrl="/">
-          {children}
+          <OnboardingGate>{children}</OnboardingGate>
         </ClerkProvider>
       </body>
     </html>

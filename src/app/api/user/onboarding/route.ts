@@ -1,22 +1,27 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 
-import type { OnboardingAnswers } from "@/lib/user-onboarding";
+import type { UserLearningProfile } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-function isAnswers(v: unknown): v is OnboardingAnswers {
+function isAnswers(v: unknown): v is UserLearningProfile {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;
-  const keys: (keyof OnboardingAnswers)[] = [
-    "role",
-    "stackFocus",
-    "learningStyle",
-    "goalsThreeMonths",
-    "hoursPerWeek",
-    "tutorialFrustration",
+  const stringKeys: (keyof UserLearningProfile)[] = [
+    "level",
+    "mediumTermGoal",
+    "sessionLength",
+    "techFocus",
+    "noteStyle",
   ];
-  return keys.every((k) => typeof o[k] === "string" && String(o[k]).trim().length > 0);
+  const validStrings = stringKeys.every(
+    (k) => typeof o[k] === "string" && String(o[k]).trim().length > 0,
+  );
+  const validPainPoints =
+    Array.isArray(o.painPoints) &&
+    o.painPoints.every((x) => typeof x === "string" && x.trim().length > 0);
+  return validStrings && validPainPoints;
 }
 
 export async function GET() {
@@ -25,9 +30,22 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { getOnboardingState } = await import("@/lib/user-onboarding");
-  const state = await getOnboardingState(userId);
-  return NextResponse.json(state);
+  let profile: Awaited<ReturnType<typeof import("@/lib/server-firestore")["serverGetUserProfile"]>> | null =
+    null;
+  try {
+    const { serverGetUserProfile } = await import("@/lib/server-firestore");
+    profile = await serverGetUserProfile(userId);
+  } catch {
+    return NextResponse.json({
+      completed: false,
+      profile: null,
+      warning: "onboarding_profile_unavailable",
+    });
+  }
+  return NextResponse.json({
+    completed: profile?.onboardingCompleted === true,
+    profile: profile?.profile ?? null,
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -50,28 +68,32 @@ export async function POST(request: NextRequest) {
     (body as { answers: unknown }).answers;
 
   if (!isAnswers(answers)) {
-    return NextResponse.json(
-      { error: "Invalid answers: all six string fields required" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Invalid profile answers" }, { status: 400 });
   }
 
-  const trimmed: OnboardingAnswers = {
-    role: answers.role.trim(),
-    stackFocus: answers.stackFocus.trim(),
-    learningStyle: answers.learningStyle.trim(),
-    goalsThreeMonths: answers.goalsThreeMonths.trim(),
-    hoursPerWeek: answers.hoursPerWeek.trim(),
-    tutorialFrustration: answers.tutorialFrustration.trim(),
+  const trimmed: UserLearningProfile = {
+    level: answers.level.trim() as UserLearningProfile["level"],
+    mediumTermGoal: answers.mediumTermGoal.trim(),
+    painPoints: answers.painPoints.map((x) => x.trim()).filter(Boolean),
+    sessionLength: answers.sessionLength.trim() as UserLearningProfile["sessionLength"],
+    techFocus: answers.techFocus.trim(),
+    noteStyle: answers.noteStyle.trim(),
   };
 
   try {
-    const { saveOnboarding } = await import("@/lib/user-onboarding");
-    await saveOnboarding(userId, trimmed);
+    const { serverSaveOnboardingData } = await import("@/lib/server-firestore");
+    await serverSaveOnboardingData(userId, trimmed);
   } catch (e) {
     const message =
       e instanceof Error ? e.message : "Failed to save onboarding";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error:
+          message ||
+          "Could not save onboarding. Set FIREBASE_SERVICE_ACCOUNT_JSON on the server (recommended) or use permissive Firestore rules for development.",
+      },
+      { status: 503 },
+    );
   }
 
   return NextResponse.json({ ok: true });

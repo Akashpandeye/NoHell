@@ -5,6 +5,8 @@ import {
   getDoc,
   getDocs,
   query,
+  serverTimestamp,
+  setDoc,
   Timestamp,
   updateDoc,
   where,
@@ -17,6 +19,8 @@ import type {
   Checkpoint,
   Note,
   Session,
+  UserLearningProfile,
+  UserProfileDoc,
   SessionRecallQuestion,
   SessionStatus,
 } from "@/types";
@@ -198,4 +202,72 @@ export async function getBookmarks(sessionId: string): Promise<Bookmark[]> {
   const items = snap.docs.map((d) => snapshotToBookmark(d.id, d.data()));
   items.sort((a, b) => a.timestampSeconds - b.timestampSeconds);
   return items;
+}
+
+/**
+ * Reads `users/{userId}` profile data used for onboarding/personalization.
+ */
+export async function getUserProfile(userId: string): Promise<UserProfileDoc | null> {
+  const snap = await getDoc(doc(db, "users", userId));
+  if (!snap.exists()) return null;
+  const d = snap.data() as Record<string, unknown>;
+  const profileRaw = d.profile as Record<string, unknown> | undefined;
+  const onboardingCompleted =
+    typeof d.onboardingCompleted === "boolean" ? d.onboardingCompleted : undefined;
+  const onboardingCompletedAt = toDate(
+    (d.onboardingCompletedAt as Timestamp | Date | null | undefined) ?? null,
+  );
+
+  let profile: UserLearningProfile | undefined;
+  if (profileRaw && typeof profileRaw === "object") {
+    const painPoints = Array.isArray(profileRaw.painPoints)
+      ? profileRaw.painPoints
+          .map((x) => String(x))
+          .filter((x) => x.trim().length > 0)
+      : [];
+    profile = {
+      level: String(profileRaw.level ?? "") as UserLearningProfile["level"],
+      mediumTermGoal: String(profileRaw.mediumTermGoal ?? ""),
+      painPoints,
+      sessionLength: String(
+        profileRaw.sessionLength ?? "",
+      ) as UserLearningProfile["sessionLength"],
+      techFocus: String(profileRaw.techFocus ?? ""),
+      noteStyle: String(profileRaw.noteStyle ?? ""),
+    };
+  }
+
+  return {
+    onboardingCompleted,
+    onboardingCompletedAt,
+    profile,
+    sessions_used:
+      typeof d.sessions_used === "number" ? Number(d.sessions_used) : undefined,
+    plan: d.plan === "pro" ? "pro" : d.plan === "free" ? "free" : undefined,
+  };
+}
+
+/**
+ * Saves onboarding answers and marks onboarding complete.
+ */
+export async function saveOnboardingData(
+  userId: string,
+  data: UserLearningProfile,
+): Promise<void> {
+  await setDoc(
+    doc(db, "users", userId),
+    {
+      onboardingCompleted: true,
+      onboardingCompletedAt: serverTimestamp(),
+      profile: {
+        level: data.level,
+        mediumTermGoal: data.mediumTermGoal,
+        painPoints: data.painPoints,
+        sessionLength: data.sessionLength,
+        techFocus: data.techFocus,
+        noteStyle: data.noteStyle,
+      },
+    },
+    { merge: true },
+  );
 }
