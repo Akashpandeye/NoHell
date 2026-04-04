@@ -471,6 +471,7 @@ export default function SessionPage() {
     Record<string, boolean>
   >({});
   const [dragging, setDragging] = useState(false);
+  const [captionNotice, setCaptionNotice] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const noteIntervalRef = useRef<number | null>(null);
@@ -637,6 +638,18 @@ export default function SessionPage() {
     return () => {
       cancelled = true;
     };
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || typeof window === "undefined") return;
+    try {
+      if (sessionStorage.getItem(`nh-tx-${sessionId}`) === "1") {
+        sessionStorage.removeItem(`nh-tx-${sessionId}`);
+        setCaptionNotice(true);
+      }
+    } catch {
+      /* private mode */
+    }
   }, [sessionId]);
 
   useEffect(() => {
@@ -1141,6 +1154,23 @@ export default function SessionPage() {
       <div className="flex min-h-0 flex-1">
         {/* Video area */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {captionNotice ? (
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-amber-500/35 bg-amber-500/10 px-4 py-2.5">
+              <p className="min-w-0 text-xs leading-relaxed text-amber-100/95">
+                YouTube captions couldn&apos;t be loaded from this server (YouTube
+                often blocks caption requests from cloud hosts like Vercel). The
+                embed still works; timed AI notes and revision cards need captions
+                and stay off until a transcript can be fetched.
+              </p>
+              <button
+                type="button"
+                className="shrink-0 cursor-pointer rounded-lg border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-100 transition-colors duration-200 hover:bg-amber-500/20"
+                onClick={() => setCaptionNotice(false)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
           {/* Goal bar */}
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-nh-border px-4 py-2.5">
             <div className="min-w-0 flex-1">

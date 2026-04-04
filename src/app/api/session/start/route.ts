@@ -85,7 +85,14 @@ async function fetchYouTubeTitle(videoId: string): Promise<string> {
   const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
   const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`;
   try {
-    const res = await fetch(oembedUrl, { next: { revalidate: 86400 } });
+    const res = await fetch(oembedUrl, {
+      cache: "no-store",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        Accept: "application/json",
+      },
+    });
     if (!res.ok) return "YouTube video";
     const data = (await res.json()) as { title?: string };
     return typeof data.title === "string" && data.title.trim()
@@ -130,17 +137,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const tResult = await fetchYouTubeTranscriptLines(videoId);
-  if (!tResult.ok) {
-    return NextResponse.json(
-      { error: "Transcript unavailable" },
-      { status: 404 },
-    );
-  }
-  const transcript: TranscriptLine[] = tResult.lines;
+  const videoTitle = await fetchYouTubeTitle(videoId);
 
+  const tResult = await fetchYouTubeTranscriptLines(videoId);
+  const transcriptUnavailable = !tResult.ok;
+  const transcript: TranscriptLine[] = tResult.ok ? tResult.lines : [];
   const chunked: TranscriptChunk[] = splitTranscriptByTime(transcript, 5);
-  const preview = firstNWordsFromTranscript(transcript, 500);
+
+  const preview =
+    firstNWordsFromTranscript(transcript, 500) ||
+    `Video title: "${videoTitle}". Learner goal: ${goal}. (No caption text from YouTube — common on cloud hosts; infer checkpoints from goal and typical coding-tutorial structure.)`;
   let userLevel = "junior";
   let techFocus = "general";
   try {
@@ -191,7 +197,6 @@ Return ONLY: {checkpoints:[{id,title,description,estimated_minute}]}`;
     checkpoints = fallbackCheckpoints(goal);
   }
 
-  const videoTitle = await fetchYouTubeTitle(videoId);
   const startedAt = new Date();
 
   let sessionId: string;
@@ -224,5 +229,6 @@ Return ONLY: {checkpoints:[{id,title,description,estimated_minute}]}`;
     sessionId,
     checkpoints,
     transcript: chunked,
+    transcriptUnavailable,
   });
 }

@@ -119,6 +119,7 @@ export function Landing() {
         error?: string;
         code?: string;
         sessionId?: string;
+        transcriptUnavailable?: boolean;
       };
 
       if (res.status === 403 && data.code === "LIMIT_REACHED") {
@@ -135,6 +136,13 @@ export function Landing() {
       }
 
       if (data.sessionId) {
+        if (data.transcriptUnavailable) {
+          try {
+            sessionStorage.setItem(`nh-tx-${data.sessionId}`, "1");
+          } catch {
+            /* private mode / disabled */
+          }
+        }
         router.push(`/session/${data.sessionId}`);
         return;
       }
