@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
 import { NextRequest, NextResponse } from "next/server";
 
 import {
@@ -10,7 +10,7 @@ import type { Checkpoint } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "llama-3.3-70b-versatile";
 const SYSTEM_PROMPT =
   "You are a learning assistant for junior developers. Respond ONLY in valid JSON. No markdown, no text outside the JSON.";
 
@@ -20,7 +20,7 @@ type StartBody = {
   userId?: string;
 };
 
-type ClaudeCheckpointRaw = {
+type CheckpointRaw = {
   id?: string;
   title?: string;
   description?: string;
@@ -37,7 +37,7 @@ function firstNWordsFromTranscript(
   return words.slice(0, wordCount).join(" ");
 }
 
-function parseClaudeCheckpointsJson(text: string): ClaudeCheckpointRaw[] {
+function parseCheckpointsJson(text: string): CheckpointRaw[] {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const jsonStr = fenced ? fenced[1]!.trim() : trimmed;
@@ -50,10 +50,10 @@ function parseClaudeCheckpointsJson(text: string): ClaudeCheckpointRaw[] {
   ) {
     throw new Error("Invalid JSON shape: expected { checkpoints: [...] }");
   }
-  return (parsed as { checkpoints: ClaudeCheckpointRaw[] }).checkpoints;
+  return (parsed as { checkpoints: CheckpointRaw[] }).checkpoints;
 }
 
-function toCheckpoint(raw: ClaudeCheckpointRaw, index: number): Checkpoint {
+function toCheckpoint(raw: CheckpointRaw, index: number): Checkpoint {
   const id = String(raw.id ?? `checkpoint-${index + 1}`);
   const label = String(raw.title ?? `Checkpoint ${index + 1}`);
   const parts = [raw.description != null ? String(raw.description) : ""];
@@ -68,6 +68,14 @@ function toCheckpoint(raw: ClaudeCheckpointRaw, index: number): Checkpoint {
     timestampSeconds: 0,
     completed: false,
   };
+}
+
+function fallbackCheckpoints(goal: string): Checkpoint[] {
+  return [
+    { id: "cp-1", label: "Getting started", summary: goal, timestampSeconds: 0, completed: false },
+    { id: "cp-2", label: "Core concepts", timestampSeconds: 0, completed: false },
+    { id: "cp-3", label: "Practice & wrap-up", timestampSeconds: 0, completed: false },
+  ];
 }
 
 async function fetchYouTubeTitle(videoId: string): Promise<string> {
@@ -119,14 +127,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey?.trim()) {
-    return NextResponse.json(
-      { error: "Anthropic API is not configured" },
-      { status: 503 },
-    );
-  }
-
   const origin = request.nextUrl.origin;
   let transcript: TranscriptLine[];
   try {
@@ -174,7 +174,11 @@ export async function POST(request: NextRequest) {
     /* optional personalization */
   }
 
-  const userPrompt = `Break this learning goal into 3-5 checkpoints for this coding tutorial.
+  let checkpoints: Checkpoint[];
+  const apiKey = process.env.GROQ_API_KEY;
+
+  if (apiKey?.trim()) {
+    const userPrompt = `Break this learning goal into 3-5 checkpoints for this coding tutorial.
 GOAL: ${goal}
 TRANSCRIPT_PREVIEW: ${preview}
 USER LEVEL: ${userLevel}
@@ -184,38 +188,29 @@ For beginners use simpler language and smaller steps.
 For juniors assume basic syntax knowledge.
 Return ONLY: {checkpoints:[{id,title,description,estimated_minute}]}`;
 
-  let checkpoints: Checkpoint[];
-  try {
-    const client = new Anthropic({ apiKey });
-    const msg = await client.messages.create({
-      model: MODEL,
-      max_tokens: 1000,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
-    });
+    try {
+      const client = new Groq({ apiKey });
+      const completion = await client.chat.completions.create({
+        model: MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 1000,
+        temperature: 0.3,
+      });
 
-    const block = msg.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") {
-      return NextResponse.json(
-        { error: "Empty response from model" },
-        { status: 502 },
-      );
-    }
+      const text = completion.choices?.[0]?.message?.content ?? "";
+      if (!text) throw new Error("Empty response");
 
-    const rawList = parseClaudeCheckpointsJson(block.text);
-    if (rawList.length === 0) {
-      return NextResponse.json(
-        { error: "No checkpoints returned from model" },
-        { status: 502 },
-      );
+      const rawList = parseCheckpointsJson(text);
+      if (rawList.length === 0) throw new Error("No checkpoints");
+      checkpoints = rawList.map((r, i) => toCheckpoint(r, i));
+    } catch {
+      checkpoints = fallbackCheckpoints(goal);
     }
-    checkpoints = rawList.map((r, i) => toCheckpoint(r, i));
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Claude request failed";
-    return NextResponse.json(
-      { error: message },
-      { status: 502 },
-    );
+  } else {
+    checkpoints = fallbackCheckpoints(goal);
   }
 
   const videoTitle = await fetchYouTubeTitle(videoId);

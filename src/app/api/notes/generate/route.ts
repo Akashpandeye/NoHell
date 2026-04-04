@@ -1,20 +1,20 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
 import { NextRequest, NextResponse } from "next/server";
 
 import type { Note, NoteType } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "llama-3.3-70b-versatile";
 
 const SYSTEM_PROMPT =
   "You are a learning assistant for junior developers. Respond ONLY in valid JSON. No markdown.";
 
 const NOTE_TYPES: ReadonlySet<string> = new Set([
-  "concept",
-  "code",
-  "tip",
-  "warning",
+  "theory",
+  "important",
+  "syntax",
+  "logic",
 ]);
 
 type GenerateBody = {
@@ -86,10 +86,10 @@ export async function POST(request: NextRequest) {
 
   const baseSeconds = parseClockToSeconds(timestampFormatted);
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey?.trim()) {
     return NextResponse.json(
-      { error: "Anthropic API is not configured" },
+      { error: "AI API is not configured" },
       { status: 503 },
     );
   }
@@ -108,39 +108,44 @@ export async function POST(request: NextRequest) {
     /* optional personalization */
   }
 
-  const userPrompt = `Extract 1-2 key learning points worth noting from this coding 
-tutorial transcript segment. Skip filler, intros, and repetition. 
-Only note things a junior dev should write down.
+  const userPrompt = `Extract 2-4 key learning points from this coding tutorial transcript segment.
+Skip filler, intros, and repetition. Only note things worth writing down.
+Categorize each note into EXACTLY ONE type. Each point must appear in only one category — never duplicate across types:
+- theory: detailed explanation of a concept, point-wise, with context and reasoning
+- important: key takeaways the learner must remember (NOT theory reworded)
+- syntax: code patterns, syntax rules, or API signatures with short examples (NOT theory about code)
+- logic: step-by-step logical flow explained simply, with a concrete example (NOT theory restated)
+RULE: If a point fits multiple categories, pick the MOST specific one. Never repeat the same idea in two notes.
 TRANSCRIPT: ${chunk}
 USER LEVEL: ${userLevel}
 Adjust explanation depth accordingly.
-For beginners explain every concept from scratch.
-For juniors skip obvious basics.
+For beginners explain every concept from scratch with simple analogies.
+For juniors skip obvious basics and focus on nuance.
 Return ONLY: {notes:[{timestamp,type,content}]}
-Types allowed: concept, code, tip, warning
 If nothing valuable: {notes:[]}`;
 
   let rawNotes: Array<{ timestamp?: unknown; type?: unknown; content?: unknown }>;
   try {
-    const client = new Anthropic({ apiKey });
-    const msg = await client.messages.create({
+    const client = new Groq({ apiKey });
+    const completion = await client.chat.completions.create({
       model: MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
+      temperature: 0.3,
     });
 
-    const block = msg.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") {
+    const text = completion.choices?.[0]?.message?.content ?? "";
+    if (!text) {
       return NextResponse.json(
         { error: "Empty response from model" },
         { status: 502 },
       );
     }
 
-    const parsed = parseNotesResponseJson(block.text) as {
-      notes?: unknown;
-    };
+    const parsed = parseNotesResponseJson(text) as { notes?: unknown };
     if (
       typeof parsed !== "object" ||
       parsed === null ||
@@ -153,7 +158,7 @@ If nothing valuable: {notes:[]}`;
     }
     rawNotes = parsed.notes as typeof rawNotes;
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Claude request failed";
+    const message = e instanceof Error ? e.message : "AI request failed";
     return NextResponse.json({ error: message }, { status: 502 });
   }
 

@@ -21,7 +21,7 @@ export interface RevisionCard {
   createdAt: Date;
 }
 
-/** AI-generated segment recap (Claude `/api/revision/card`). */
+/** AI-generated segment recap (`/api/revision/card`). */
 export interface TutorialRevisionCard {
   time_range: string;
   concepts: Array<{
@@ -65,7 +65,7 @@ export interface Session {
   recallQuestions?: SessionRecallQuestion[];
 }
 
-export type NoteType = "concept" | "code" | "tip" | "warning";
+export type NoteType = "theory" | "important" | "syntax" | "logic";
 
 export interface Note {
   id: string;

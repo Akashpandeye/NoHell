@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useId, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 
 import { useUser } from "@clerk/nextjs";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -23,6 +23,16 @@ const featurePoints = [
   "session recall",
 ] as const;
 
+const goalPresets = [
+  "Understand the core concepts",
+  "Build along with the tutorial",
+  "Learn the syntax and patterns",
+  "Prepare for an interview",
+  "Quick overview / refresher",
+] as const;
+
+type Step = "url" | "goal";
+
 export function Landing() {
   const urlId = useId();
   const goalId = useId();
@@ -30,90 +40,121 @@ export function Landing() {
   const { user, isLoaded } = useUser();
   const [url, setUrl] = useState("");
   const [goal, setGoal] = useState("");
+  const [step, setStep] = useState<Step>("url");
+  const [phase, setPhase] = useState<"idle" | "out" | "in">("idle");
   const [status, setStatus] = useState<"idle" | "error">("idle");
   const [message, setMessage] = useState("");
   const [starting, setStarting] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
+  const pendingStep = useRef<Step | null>(null);
 
-  const onSubmit = useCallback(
-    async (e: React.FormEvent<HTMLFormElement>) => {
-      e.preventDefault();
-      const trimmed = url.trim();
-      const goalTrimmed = goal.trim();
-      if (!trimmed) {
-        setStatus("error");
-        setMessage("Paste a YouTube link to continue.");
-        return;
-      }
-      const videoId = extractVideoId(trimmed);
-      if (!videoId) {
-        setStatus("error");
-        setMessage("Use a valid YouTube watch or youtu.be URL.");
-        return;
-      }
-      if (!isLoaded) {
-        setStatus("error");
-        setMessage("Please wait…");
-        return;
-      }
-      if (!user?.id) {
-        router.push(`/sign-up?url=${encodeURIComponent(trimmed)}`);
-        return;
-      }
-      if (!goalTrimmed) {
-        setStatus("error");
-        setMessage("Add a short learning goal for this session.");
-        return;
-      }
-
-      setStarting(true);
-      setStatus("idle");
-      setMessage("");
-      try {
-        const res = await fetch("/api/session/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            videoId,
-            goal: goalTrimmed,
-            userId: user.id,
-          }),
-        });
-        const data = (await res.json()) as {
-          error?: string;
-          code?: string;
-          sessionId?: string;
-        };
-
-        if (res.status === 403 && data.code === "LIMIT_REACHED") {
-          setShowUpgrade(true);
-          setStatus("error");
-          setMessage("You’ve reached the free session limit.");
-          return;
-        }
-
-        if (!res.ok) {
-          setStatus("error");
-          setMessage(data.error ?? "Could not start session.");
-          return;
-        }
-
-        if (data.sessionId) {
-          router.push(`/session/${data.sessionId}`);
-          return;
-        }
-
-        setStatus("error");
-        setMessage("Unexpected response from server.");
-      } catch {
-        setStatus("error");
-        setMessage("Network error — try again.");
-      } finally {
-        setStarting(false);
-      }
+  const transitionTo = useCallback(
+    (next: Step) => {
+      if (next === step) return;
+      pendingStep.current = next;
+      setPhase("out");
+      setTimeout(() => {
+        if (pendingStep.current == null) return;
+        setStep(pendingStep.current);
+        setPhase("in");
+        setTimeout(() => setPhase("idle"), 20);
+      }, 250);
     },
-    [url, goal, isLoaded, user, router],
+    [step],
   );
+
+  const handleUrlNext = useCallback(() => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      setStatus("error");
+      setMessage("Paste a YouTube link to continue.");
+      return;
+    }
+    const videoId = extractVideoId(trimmed);
+    if (!videoId) {
+      setStatus("error");
+      setMessage("Use a valid YouTube watch or youtu.be URL.");
+      return;
+    }
+    if (!isLoaded) {
+      setStatus("error");
+      setMessage("Please wait…");
+      return;
+    }
+    if (!user?.id) {
+      router.push(`/sign-up?url=${encodeURIComponent(trimmed)}`);
+      return;
+    }
+    setStatus("idle");
+    setMessage("");
+    transitionTo("goal");
+  }, [url, isLoaded, user, router, transitionTo]);
+
+  const handleStart = useCallback(async () => {
+    const trimmed = url.trim();
+    const goalTrimmed = goal.trim();
+    const videoId = extractVideoId(trimmed);
+    if (!videoId || !user?.id) return;
+
+    if (!goalTrimmed) {
+      setStatus("error");
+      setMessage("Add a short learning goal for this session.");
+      return;
+    }
+
+    setStarting(true);
+    setStatus("idle");
+    setMessage("");
+    try {
+      const res = await fetch("/api/session/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoId,
+          goal: goalTrimmed,
+          userId: user.id,
+        }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        code?: string;
+        sessionId?: string;
+      };
+
+      if (res.status === 403 && data.code === "LIMIT_REACHED") {
+        setShowUpgrade(true);
+        setStatus("error");
+        setMessage("You've reached the free session limit.");
+        return;
+      }
+
+      if (!res.ok) {
+        setStatus("error");
+        setMessage(data.error ?? "Could not start session.");
+        return;
+      }
+
+      if (data.sessionId) {
+        router.push(`/session/${data.sessionId}`);
+        return;
+      }
+
+      setStatus("error");
+      setMessage("Unexpected response from server.");
+    } catch {
+      setStatus("error");
+      setMessage("Network error — try again.");
+    } finally {
+      setStarting(false);
+    }
+  }, [url, goal, user, router]);
+
+  const translateClass =
+    phase === "out"
+      ? "-translate-x-8 opacity-0"
+      : phase === "in"
+        ? "translate-x-8 opacity-0"
+        : "translate-x-0 opacity-100";
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden">
@@ -166,48 +207,115 @@ export function Landing() {
             </span>
           </h1>
           <p className="mt-5 max-w-md text-pretty font-mono text-[13px] leading-relaxed tracking-wide text-[#c9aa8c] sm:text-sm">
-            Paste any Tutorial from YouTube . Get AI notes, hourly revision cards, and recall questions as you watch.
+            Paste any Tutorial from YouTube. Get AI notes, hourly revision
+            cards, and recall questions as you watch.
           </p>
 
-          <form
-            id="start"
-            onSubmit={onSubmit}
-            className="mt-10 w-full max-w-xl scroll-mt-28"
-            noValidate
+          <div
+            className={`mt-10 w-full max-w-xl transition-all duration-250 ease-out ${translateClass}`}
           >
-            <label htmlFor={urlId} className="sr-only">
-              YouTube tutorial URL
-            </label>
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:rounded-xl sm:border sm:border-nh-border sm:bg-nh-surface sm:p-1 sm:shadow-sm">
-                <input
-                  id={urlId}
-                  name="url"
-                  type="url"
-                  inputMode="url"
-                  autoComplete="url"
-                  placeholder="https://www.youtube.com/watch?v=…"
-                  value={url}
-                  onChange={(e) => {
-                    setUrl(e.target.value);
-                    if (status !== "idle") {
-                      setStatus("idle");
-                      setMessage("");
-                    }
-                  }}
-                  className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:border-0 sm:bg-transparent sm:py-3.5"
-                />
-                <button
-                  type="submit"
-                  disabled={starting}
-                  className="font-display inline-flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-nh-cta px-6 text-sm font-bold text-neutral-950 shadow-sm transition-[background-color,transform] duration-200 hover:bg-nh-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-cta focus-visible:ring-offset-2 focus-visible:ring-offset-nh-bg active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60 sm:shrink-0 sm:px-7"
-                >
-                  {starting ? "Starting…" : "Start"}
-                  <ArrowRight className="h-4 w-4" strokeWidth={2} aria-hidden />
-                </button>
+            {/* ---------- STEP 1: Paste URL ---------- */}
+            {step === "url" && (
+              <div>
+                <label htmlFor={urlId} className="sr-only">
+                  YouTube tutorial URL
+                </label>
+                <div className="flex flex-col gap-3 sm:flex-row sm:rounded-xl sm:border sm:border-nh-border sm:bg-nh-surface sm:p-1 sm:shadow-sm">
+                  <input
+                    id={urlId}
+                    name="url"
+                    type="url"
+                    inputMode="url"
+                    autoComplete="url"
+                    placeholder="https://www.youtube.com/watch?v=…"
+                    value={url}
+                    onChange={(e) => {
+                      setUrl(e.target.value);
+                      if (status !== "idle") {
+                        setStatus("idle");
+                        setMessage("");
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleUrlNext();
+                      }
+                    }}
+                    className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:border-0 sm:bg-transparent sm:py-3.5"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleUrlNext}
+                    className="font-display inline-flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-nh-cta px-6 text-sm font-bold text-neutral-950 shadow-sm transition-[background-color,transform] duration-200 hover:bg-nh-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-cta focus-visible:ring-offset-2 focus-visible:ring-offset-nh-bg active:translate-y-px sm:shrink-0 sm:px-7"
+                  >
+                    Next
+                    <ArrowRight
+                      className="h-4 w-4"
+                      strokeWidth={2}
+                      aria-hidden
+                    />
+                  </button>
+                </div>
               </div>
-              {user?.id ? (
-                <>
+            )}
+
+            {/* ---------- STEP 2: Describe your goal ---------- */}
+            {step === "goal" && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatus("idle");
+                    setMessage("");
+                    transitionTo("url");
+                  }}
+                  className="mb-4 inline-flex items-center gap-1 text-xs text-nh-muted transition-colors hover:text-nh-text"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2} />
+                  Change link
+                </button>
+
+                <div className="mb-5 flex items-center justify-center">
+                  <span className="max-w-full truncate rounded-lg border border-nh-border bg-nh-surface px-3 py-1.5 font-mono text-[11px] text-nh-muted">
+                    {url.trim()}
+                  </span>
+                </div>
+
+                <h2 className="font-display text-xl font-bold text-nh-text sm:text-2xl">
+                  Describe your goal
+                </h2>
+                <p className="mt-1.5 text-sm text-nh-muted">
+                  What do you want to get out of this tutorial?
+                </p>
+
+                <div className="mt-5 flex flex-wrap justify-center gap-2">
+                  {goalPresets.map((preset) => {
+                    const active = goal === preset;
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setGoal(preset);
+                          if (status !== "idle") {
+                            setStatus("idle");
+                            setMessage("");
+                          }
+                        }}
+                        className={`rounded-full border px-3.5 py-2 text-xs transition-colors ${
+                          active
+                            ? "border-nh-cta bg-nh-cta/10 text-nh-text"
+                            : "border-nh-border text-nh-muted hover:border-nh-cta/50"
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-5">
                   <label htmlFor={goalId} className="sr-only">
                     Learning goal
                   </label>
@@ -216,7 +324,7 @@ export function Landing() {
                     name="goal"
                     type="text"
                     autoComplete="off"
-                    placeholder="Your goal (e.g. build a REST API with Express)"
+                    placeholder="Or type your own goal…"
                     value={goal}
                     onChange={(e) => {
                       setGoal(e.target.value);
@@ -225,22 +333,43 @@ export function Landing() {
                         setMessage("");
                       }
                     }}
-                    className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 text-left font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35 sm:px-4"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void handleStart();
+                      }
+                    }}
+                    className="min-h-12 w-full rounded-xl border border-nh-border bg-nh-surface px-4 py-3 text-left font-mono text-[13px] text-nh-text placeholder:text-nh-dim transition-[border-color,box-shadow] duration-200 focus-visible:border-nh-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/35"
                   />
-                </>
-              ) : null}
-            </div>
-            {message ? (
-              <p
-                role={status === "error" ? "alert" : "status"}
-                className={`mt-3 text-left text-xs sm:text-sm ${
-                  status === "error" ? "text-orange-300" : "text-nh-muted"
-                }`}
-              >
-                {message}
-              </p>
-            ) : null}
-          </form>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={starting || !goal.trim()}
+                  onClick={() => void handleStart()}
+                  className="font-display mt-5 inline-flex min-h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-nh-cta px-6 text-sm font-bold text-neutral-950 shadow-sm transition-[background-color,transform] duration-200 hover:bg-nh-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-cta focus-visible:ring-offset-2 focus-visible:ring-offset-nh-bg active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {starting ? "Starting…" : "Start Session"}
+                  <ArrowRight
+                    className="h-4 w-4"
+                    strokeWidth={2}
+                    aria-hidden
+                  />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {message ? (
+            <p
+              role={status === "error" ? "alert" : "status"}
+              className={`mt-3 w-full max-w-xl text-left text-xs sm:text-sm ${
+                status === "error" ? "text-orange-300" : "text-nh-muted"
+              }`}
+            >
+              {message}
+            </p>
+          ) : null}
 
           <ul
             id="benefits"

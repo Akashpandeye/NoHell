@@ -2,7 +2,15 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
 import {
   addBookmark as persistBookmark,
@@ -18,18 +26,20 @@ import {
   type TranscriptChunk,
   type TranscriptLine,
 } from "@/lib/transcript";
-import type { Note, Session, TutorialRevisionCard } from "@/types";
+import type { Note, NoteType, Session, TutorialRevisionCard } from "@/types";
 
 type TabId = "ai" | "my" | "bookmarks";
 
-/** Client-only flag for entrance animation (stripped after animation). */
-type AiNoteRow = Note & { animate?: boolean };
+type AiNoteRow = Note & { animate?: boolean; editedContent?: string };
 
-/** TEST MODE — change to 300_000 for production (5 minutes). */
 const NOTE_GENERATE_INTERVAL_MS = 30_000;
-
-/** TEST MODE — change to 3_600_000 for production (3600 seconds = 1 hour). */
 const REVISION_CARD_INTERVAL_MS = 3 * 60 * 1000;
+
+const PANEL_MIN_W = 280;
+const PANEL_MAX_W = 600;
+const PANEL_DEFAULT_W = 380;
+
+const FOCUS_PRESETS = [15, 25, 45, 60] as const;
 
 type BookmarkItem = {
   id: string;
@@ -37,7 +47,25 @@ type BookmarkItem = {
   timestampSeconds: number;
 };
 
-/** M:SS (minutes not zero-padded). */
+const NOTE_CATEGORIES: { type: NoteType; label: string; color: string }[] = [
+  { type: "theory", label: "Theory", color: "border-l-sky-400" },
+  { type: "important", label: "Important", color: "border-l-amber-400" },
+  { type: "syntax", label: "Syntax", color: "border-l-emerald-400" },
+  { type: "logic", label: "Logic", color: "border-l-violet-400" },
+];
+
+const LEGACY_TYPE_MAP: Record<string, NoteType> = {
+  concept: "theory",
+  tip: "important",
+  code: "syntax",
+  warning: "logic",
+};
+
+function normalizeNoteType(raw: string): NoteType {
+  if (raw in LEGACY_TYPE_MAP) return LEGACY_TYPE_MAP[raw]!;
+  return raw as NoteType;
+}
+
 function formatBookmarkTime(totalSeconds: number): string {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
@@ -54,19 +82,201 @@ function videoDurationSec(
   session: Session | null,
   chunks: TranscriptChunk[],
 ): number {
-  if (session && session.totalWatchSeconds > 0) {
-    return session.totalWatchSeconds;
-  }
-  if (chunks.length > 0) {
-    return Math.max(...chunks.map((c) => c.endSec), 0);
-  }
+  if (session && session.totalWatchSeconds > 0) return session.totalWatchSeconds;
+  if (chunks.length > 0) return Math.max(...chunks.map((c) => c.endSec), 0);
   return 1;
 }
 
+// ---------------------------------------------------------------------------
+// Inline-editable note content
+// ---------------------------------------------------------------------------
+function EditableContent({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (editing && ref.current) {
+      ref.current.focus();
+      ref.current.style.height = "auto";
+      ref.current.style.height = `${ref.current.scrollHeight}px`;
+    }
+  }, [editing]);
+
+  const commit = useCallback(() => {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) onChange(trimmed);
+  }, [draft, value, onChange]);
+
+  const onKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Escape") {
+        setDraft(value);
+        setEditing(false);
+      }
+    },
+    [value],
+  );
+
+  if (editing) {
+    return (
+      <textarea
+        ref={ref}
+        className="w-full resize-none rounded border border-nh-border bg-nh-surface p-1.5 text-xs leading-relaxed text-nh-text outline-none transition-colors duration-150 focus:border-nh-teal"
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          e.target.style.height = "auto";
+          e.target.style.height = `${e.target.scrollHeight}px`;
+        }}
+        onBlur={commit}
+        onKeyDown={onKeyDown}
+      />
+    );
+  }
+
+  return (
+    <p
+      className="cursor-text whitespace-pre-wrap rounded px-1.5 py-1 text-nh-text transition-colors duration-150 hover:bg-nh-surface-2"
+      onClick={() => {
+        setDraft(value);
+        setEditing(true);
+      }}
+      title="Click to edit"
+    >
+      {value}
+    </p>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Focus Timer Widget
+// ---------------------------------------------------------------------------
+function FocusTimer() {
+  const [totalMin, setTotalMin] = useState(25);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [open, setOpen] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const running = remaining !== null && remaining > 0;
+  const done = remaining === 0;
+
+  useEffect(() => {
+    if (!running) return;
+    intervalRef.current = setInterval(() => {
+      setRemaining((r) => {
+        if (r === null || r <= 0) return 0;
+        return r - 1;
+      });
+    }, 1000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [running]);
+
+  const start = useCallback(() => {
+    setRemaining(totalMin * 60);
+    setOpen(false);
+  }, [totalMin]);
+
+  const reset = useCallback(() => {
+    setRemaining(null);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  }, []);
+
+  const display = remaining !== null ? formatClock(remaining) : null;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs transition-colors duration-200 ${
+          done
+            ? "border-nh-cta bg-nh-cta/20 text-nh-cta"
+            : running
+              ? "border-nh-teal/50 text-nh-teal"
+              : "border-nh-border text-nh-muted hover:border-nh-teal/50 hover:text-nh-text"
+        }`}
+        onClick={() => {
+          if (done) {
+            reset();
+          } else if (running) {
+            reset();
+          } else {
+            setOpen((o) => !o);
+          }
+        }}
+      >
+        {done
+          ? "Break!"
+          : running
+            ? display
+            : "Focus"}
+      </button>
+
+      {open && !running && (
+        <div className="absolute right-0 top-full z-50 mt-2 w-48 rounded-xl border border-nh-border bg-nh-surface p-3 shadow-lg">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-nh-dim">
+            Focus duration
+          </p>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {FOCUS_PRESETS.map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setTotalMin(m)}
+                className={`cursor-pointer rounded-lg border px-2.5 py-1.5 text-xs transition-colors duration-150 ${
+                  totalMin === m
+                    ? "border-nh-cta bg-nh-cta/10 text-nh-text"
+                    : "border-nh-border text-nh-muted hover:border-nh-cta/50"
+                }`}
+              >
+                {m}m
+              </button>
+            ))}
+          </div>
+          <div className="mb-3 flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              max={180}
+              value={totalMin}
+              onChange={(e) => {
+                const v = Number.parseInt(e.target.value, 10);
+                if (Number.isFinite(v) && v > 0) setTotalMin(Math.min(v, 180));
+              }}
+              className="w-16 rounded-lg border border-nh-border bg-nh-bg px-2 py-1.5 text-xs text-nh-text outline-none transition-colors duration-150 focus:border-nh-teal"
+            />
+            <span className="text-[10px] text-nh-dim">min</span>
+          </div>
+          <button
+            type="button"
+            onClick={start}
+            className="w-full cursor-pointer rounded-lg bg-nh-cta px-3 py-2 text-xs font-bold text-neutral-950 transition-colors duration-200 hover:bg-nh-cta-hover"
+          >
+            Start Focus
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
 export default function SessionPage() {
   const params = useParams();
   const router = useRouter();
-  const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+  const sessionId =
+    typeof params.sessionId === "string" ? params.sessionId : "";
 
   const [session, setSession] = useState<Session | null>(null);
   const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>([]);
@@ -74,7 +284,8 @@ export default function SessionPage() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [aiNotes, setAiNotes] = useState<AiNoteRow[]>([]);
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([]);
-  const [boardOpen, setBoardOpen] = useState(true);
+  const [boardOpen, setBoardOpen] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(PANEL_DEFAULT_W);
   const [activeTab, setActiveTab] = useState<TabId>("ai");
   const [myNotesText, setMyNotesText] = useState("");
   const [filledCheckpointIds, setFilledCheckpointIds] = useState<
@@ -86,6 +297,10 @@ export default function SessionPage() {
   const [revisionOverlay, setRevisionOverlay] =
     useState<TutorialRevisionCard | null>(null);
   const [ending, setEnding] = useState(false);
+  const [collapsedCategories, setCollapsedCategories] = useState<
+    Record<string, boolean>
+  >({});
+  const [dragging, setDragging] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const noteIntervalRef = useRef<number | null>(null);
@@ -93,12 +308,42 @@ export default function SessionPage() {
   const elapsedRef = useRef(0);
   const revisionOverlayRef = useRef<TutorialRevisionCard | null>(null);
   const addBookmarkRef = useRef<() => void>(() => {});
+  const dragStartXRef = useRef(0);
+  const dragStartWRef = useRef(PANEL_DEFAULT_W);
 
   const durationSec = useMemo(
     () => videoDurationSec(session, transcript),
     [session, transcript],
   );
 
+  // ---- drag-to-resize ----
+  const onDragStart = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault();
+      setDragging(true);
+      dragStartXRef.current = e.clientX;
+      dragStartWRef.current = panelWidth;
+    },
+    [panelWidth],
+  );
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: globalThis.MouseEvent) => {
+      const dx = dragStartXRef.current - e.clientX;
+      const next = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, dragStartWRef.current + dx));
+      setPanelWidth(next);
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [dragging]);
+
+  // ---- data load ----
   useEffect(() => {
     if (!sessionId) {
       setLoadError("Missing session id");
@@ -139,10 +384,7 @@ export default function SessionPage() {
           const existing = await getNotes(sessionId);
           notesFromDb = existing
             .slice()
-            .sort(
-              (a, b) =>
-                b.createdAt.getTime() - a.createdAt.getTime(),
-            );
+            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
         } catch {
           notesFromDb = [];
         }
@@ -181,6 +423,7 @@ export default function SessionPage() {
     revisionOverlayRef.current = revisionOverlay;
   }, [revisionOverlay]);
 
+  // ---- timer ----
   useEffect(() => {
     if (loading || !session || loadError) return;
     timerRef.current = setInterval(() => {
@@ -194,6 +437,7 @@ export default function SessionPage() {
     };
   }, [loading, session, loadError]);
 
+  // ---- auto note generation ----
   useEffect(() => {
     if (loading || !session || loadError || !sessionId) return;
 
@@ -242,6 +486,7 @@ export default function SessionPage() {
     };
   }, [loading, session, loadError, sessionId, transcript]);
 
+  // ---- revision card ----
   useEffect(() => {
     if (loading || !session || loadError || !sessionId) return;
 
@@ -299,10 +544,7 @@ export default function SessionPage() {
   }, [session, durationSec]);
 
   const toggleCheckpointDot = useCallback((id: string) => {
-    setFilledCheckpointIds((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
+    setFilledCheckpointIds((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
   const addBookmark = useCallback(() => {
@@ -345,9 +587,8 @@ export default function SessionPage() {
           tag === "INPUT" ||
           tag === "SELECT" ||
           el.isContentEditable
-        ) {
+        )
           return;
-        }
       }
       e.preventDefault();
       addBookmarkRef.current();
@@ -377,7 +618,9 @@ export default function SessionPage() {
     stopAllIntervals();
 
     const elapsed = elapsedRef.current;
-    const notesPayload = aiNotes.map((n) => n.content);
+    const notesPayload = aiNotes.map(
+      (n) => n.editedContent ?? n.content,
+    );
 
     try {
       await updateSession(sessionId, {
@@ -404,28 +647,56 @@ export default function SessionPage() {
     }
 
     router.push(`/session/${sessionId}/recap`);
-  }, [
-    ending,
-    sessionId,
-    session,
-    aiNotes,
-    router,
-    stopAllIntervals,
-  ]);
+  }, [ending, sessionId, session, aiNotes, router, stopAllIntervals]);
+
+  // ---- grouped notes by category ----
+  const notesByCategory = useMemo(() => {
+    const map: Record<NoteType, AiNoteRow[]> = {
+      theory: [],
+      important: [],
+      syntax: [],
+      logic: [],
+    };
+    for (const n of aiNotes) {
+      const t = normalizeNoteType(n.type);
+      (map[t] ??= []).push(n);
+    }
+    return map;
+  }, [aiNotes]);
+
+  const updateNoteContent = useCallback((noteId: string, content: string) => {
+    setAiNotes((prev) =>
+      prev.map((n) =>
+        n.id === noteId ? { ...n, editedContent: content } : n,
+      ),
+    );
+  }, []);
+
+  const toggleCategory = useCallback((type: string) => {
+    setCollapsedCategories((prev) => ({ ...prev, [type]: !prev[type] }));
+  }, []);
+
+  // ---- renders ----
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center border border-neutral-300 bg-neutral-50">
-        <p className="text-sm text-neutral-600">Loading session…</p>
+      <div className="flex h-screen items-center justify-center bg-nh-bg">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-nh-teal border-t-transparent" />
+          <p className="text-sm text-nh-muted">Loading session…</p>
+        </div>
       </div>
     );
   }
 
   if (loadError || !session) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 border border-neutral-300 bg-neutral-50">
-        <p className="text-sm text-neutral-600">{loadError ?? "Not found"}</p>
-        <Link href="/" className="text-sm underline">
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-nh-bg">
+        <p className="text-sm text-nh-muted">{loadError ?? "Not found"}</p>
+        <Link
+          href="/"
+          className="cursor-pointer text-sm text-nh-teal underline transition-colors duration-200 hover:text-nh-cta"
+        >
           Home
         </Link>
       </div>
@@ -434,9 +705,16 @@ export default function SessionPage() {
 
   const videoId = session.videoId;
   const embedSrc = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}`;
+  const youtubeUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden border border-neutral-300 bg-neutral-50">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-nh-bg text-nh-text">
+      {/* Prevent text selection while dragging panel */}
+      {dragging && (
+        <div className="pointer-events-auto fixed inset-0 z-[200] cursor-col-resize" />
+      )}
+
+      {/* ---- Revision overlay ---- */}
       {revisionOverlay ? (
         <div
           className="absolute inset-0 z-[100] flex flex-col bg-neutral-950/88 backdrop-blur-sm"
@@ -445,41 +723,37 @@ export default function SessionPage() {
           aria-labelledby="revision-time-range"
         >
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
-            <header className="mb-6 border-b border-neutral-600 pb-3">
-              <p className="text-[10px] uppercase tracking-wider text-neutral-400">
-                Time range
+            <header className="mb-6 border-b border-nh-border pb-3">
+              <p className="text-[10px] uppercase tracking-wider text-nh-dim">
+                Revision card
               </p>
               <h2
                 id="revision-time-range"
-                className="font-mono text-lg text-neutral-100"
+                className="font-mono text-lg text-nh-text"
               >
                 {revisionOverlay.time_range}
               </h2>
             </header>
 
             <section className="mb-6 space-y-3">
-              <h3 className="text-xs font-semibold text-neutral-300">
-                Concepts
-              </h3>
+              <h3 className="text-xs font-semibold text-nh-muted">Concepts</h3>
               <ul className="space-y-3">
                 {revisionOverlay.concepts.map((c, i) => (
                   <li
                     key={`${c.name}-${i}`}
-                    className="border border-neutral-600 bg-neutral-900/80 p-3 text-sm text-neutral-200"
+                    className="rounded-xl border border-nh-border bg-nh-surface p-4 text-sm text-nh-text"
                   >
-                    <p className="mb-2 font-semibold text-neutral-100">
-                      {c.name}
-                    </p>
-                    <p className="mb-1 text-neutral-300">
-                      <span className="text-neutral-500">What: </span>
+                    <p className="mb-2 font-semibold">{c.name}</p>
+                    <p className="mb-1 text-nh-muted">
+                      <span className="text-nh-dim">What: </span>
                       {c.what}
                     </p>
-                    <p className="mb-1 text-neutral-300">
-                      <span className="text-neutral-500">Why: </span>
+                    <p className="mb-1 text-nh-muted">
+                      <span className="text-nh-dim">Why: </span>
                       {c.why}
                     </p>
                     {c.analogy ? (
-                      <p className="italic text-neutral-400">{c.analogy}</p>
+                      <p className="italic text-nh-dim">{c.analogy}</p>
                     ) : null}
                   </li>
                 ))}
@@ -488,47 +762,50 @@ export default function SessionPage() {
 
             {revisionOverlay.code_skeleton.trim() ? (
               <section className="mb-6">
-                <h3 className="mb-2 text-xs font-semibold text-neutral-300">
+                <h3 className="mb-2 text-xs font-semibold text-nh-muted">
                   Code skeleton
                 </h3>
-                <pre className="overflow-x-auto border border-neutral-600 bg-neutral-950 p-3 font-mono text-xs text-neutral-200">
+                <pre className="overflow-x-auto rounded-xl border border-nh-border bg-nh-surface p-4 font-mono text-xs leading-relaxed text-nh-text">
                   {revisionOverlay.code_skeleton}
                 </pre>
               </section>
             ) : null}
 
-            <section className="mb-8 border-t border-neutral-600 pt-4">
-              <h3 className="mb-2 text-xs font-semibold text-neutral-300">
+            <section className="mb-8 border-t border-nh-border pt-4">
+              <h3 className="mb-2 text-xs font-semibold text-nh-muted">
                 Recall
               </h3>
-              <p className="text-sm text-neutral-200">
+              <p className="text-sm text-nh-text">
                 {revisionOverlay.recall_question}
               </p>
             </section>
           </div>
 
-          <div className="shrink-0 border-t border-neutral-600 bg-neutral-950/90 px-4 py-4 sm:px-8">
+          <div className="shrink-0 border-t border-nh-border bg-nh-bg/90 px-4 py-4 sm:px-8">
             <button
               type="button"
-              className="w-full border border-neutral-500 bg-neutral-100 px-4 py-3 text-sm font-medium text-neutral-900 hover:bg-white"
+              className="w-full cursor-pointer rounded-xl bg-nh-cta px-4 py-3 text-sm font-bold text-neutral-950 shadow-sm transition-colors duration-200 hover:bg-nh-cta-hover"
               onClick={() => setRevisionOverlay(null)}
             >
-              Resume video
+              Resume Video
             </button>
           </div>
         </div>
       ) : null}
 
-      {/* TOP BAR 50px */}
-      <header className="flex h-[50px] min-h-[50px] shrink-0 items-center border-b border-neutral-300 px-3">
-        <Link href="/" className="shrink-0 text-sm font-semibold">
+      {/* ---- TOP BAR ---- */}
+      <header className="flex h-[50px] min-h-[50px] shrink-0 items-center border-b border-nh-border px-3">
+        <Link
+          href="/"
+          className="shrink-0 cursor-pointer text-sm font-semibold text-nh-text transition-colors duration-200 hover:text-nh-teal"
+        >
           NoHell
         </Link>
 
         <div className="flex flex-1 items-center justify-center px-4">
-          <div className="relative h-3 w-full max-w-md border border-neutral-400 bg-neutral-200">
+          <div className="relative h-2.5 w-full max-w-md rounded-full border border-nh-border bg-nh-surface">
             <div
-              className="absolute left-0 top-0 h-full bg-neutral-400/40"
+              className="absolute left-0 top-0 h-full rounded-full bg-nh-teal/30 transition-[width] duration-1000 ease-linear"
               style={{
                 width: `${Math.min(100, (elapsedSeconds / Math.max(durationSec, 1)) * 100)}%`,
               }}
@@ -541,14 +818,14 @@ export default function SessionPage() {
                   key={checkpoint.id}
                   type="button"
                   title={checkpoint.label}
-                  className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-neutral-600"
+                  className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full border border-nh-border transition-colors duration-150"
                   style={{ left: `${pct}%` }}
                   onClick={() => toggleCheckpointDot(checkpoint.id)}
                   aria-pressed={filled}
                 >
                   <span
-                    className={`block size-full rounded-full ${
-                      filled ? "bg-neutral-800" : "bg-neutral-100"
+                    className={`block size-full rounded-full transition-colors duration-150 ${
+                      filled ? "bg-nh-teal" : "bg-nh-surface"
                     }`}
                   />
                 </button>
@@ -557,13 +834,14 @@ export default function SessionPage() {
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-3">
-          <span className="font-mono text-sm tabular-nums">
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="font-mono text-sm tabular-nums text-nh-muted">
             {formatClock(elapsedSeconds)}
           </span>
+          <FocusTimer />
           <button
             type="button"
-            className="border border-neutral-400 px-2 py-1 text-xs disabled:opacity-50"
+            className="cursor-pointer rounded-lg border border-nh-border px-2.5 py-1 text-xs text-nh-text transition-colors duration-200 hover:border-nh-teal/50 hover:text-nh-teal disabled:cursor-not-allowed disabled:opacity-50"
             onClick={addBookmark}
             disabled={ending}
           >
@@ -571,19 +849,40 @@ export default function SessionPage() {
           </button>
           <button
             type="button"
-            className="border border-neutral-400 px-2 py-1 text-xs disabled:opacity-50"
+            className="cursor-pointer rounded-lg border border-orange-500/40 bg-orange-500/10 px-2.5 py-1 text-xs text-orange-300 transition-colors duration-200 hover:border-orange-400/60 hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => void endSession()}
             disabled={ending}
           >
-            {ending ? "Ending…" : "End Session"}
+            {ending ? "Ending…" : "End"}
           </button>
         </div>
       </header>
 
-      {/* MAIN */}
-      <div className="flex min-h-0 flex-1 flex-row">
-        {/* LEFT: video */}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col border-r border-neutral-300">
+      {/* ---- MAIN AREA ---- */}
+      <div className="flex min-h-0 flex-1">
+        {/* Video area */}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* Goal bar */}
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-nh-border px-4 py-2.5">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-nh-dim">
+                Goal
+              </p>
+              <p className="truncate text-sm font-medium text-nh-text">
+                {session.goal}
+              </p>
+            </div>
+            <a
+              href={youtubeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 cursor-pointer rounded-lg border border-nh-border px-3 py-1.5 text-[11px] text-nh-muted transition-colors duration-200 hover:border-nh-teal/50 hover:text-nh-text"
+            >
+              Open on YouTube
+            </a>
+          </div>
+
+          {/* Video embed */}
           <div className="relative min-h-0 flex-1">
             <iframe
               title="Video"
@@ -593,134 +892,214 @@ export default function SessionPage() {
               allowFullScreen
             />
           </div>
-          <div className="shrink-0 border-t border-neutral-300 px-3 py-2 text-xs">
-            <span className="font-medium">Goal: </span>
-            <span>{session.goal}</span>
-          </div>
         </div>
 
-        {/* TOGGLE strip 22px */}
-        <button
-          type="button"
-          className="flex w-[22px] min-w-[22px] shrink-0 items-center justify-center border-r border-neutral-300 bg-neutral-200 text-[10px]"
-          onClick={() => setBoardOpen((o) => !o)}
-          aria-expanded={boardOpen}
-          aria-label={boardOpen ? "Hide notes" : "Show notes"}
-        >
-          {boardOpen ? "›" : "‹"}
-        </button>
+        {/* ---- RESIZE HANDLE ---- */}
+        {boardOpen && (
+          <div
+            className="flex w-[5px] min-w-[5px] shrink-0 cursor-col-resize items-center justify-center bg-nh-border/50 transition-colors duration-150 hover:bg-nh-teal/30 active:bg-nh-teal/50"
+            onMouseDown={onDragStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize notes panel"
+          />
+        )}
 
-        {/* RIGHT: board */}
-        <aside
-          className={`flex min-h-0 flex-col overflow-hidden border-l border-neutral-300 bg-neutral-100 transition-[width] duration-200 ${
-            boardOpen ? "w-[340px] min-w-[340px]" : "w-0 min-w-0 border-l-0"
-          }`}
-        >
-          <div className="flex shrink-0 flex-col gap-1 border-b border-neutral-300 px-2 py-1">
-            <div className="flex">
-              {(
-                [
-                  ["ai", "AI Notes"],
-                  ["my", "My Notes"],
-                  ["bookmarks", "Bookmarks"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`flex flex-1 items-center justify-center gap-1 px-1 py-2 text-xs ${
-                    activeTab === id ? "border-b-2 border-neutral-800" : ""
-                  }`}
-                  onClick={() => setActiveTab(id)}
-                >
-                  <span>{label}</span>
-                  {id === "ai" && aiNotes.length > 0 ? (
-                    <span
-                      className="min-w-[1.1rem] rounded-full border border-neutral-400 px-1 text-[10px] leading-none text-neutral-600"
-                      aria-label={`${aiNotes.length} AI notes`}
-                    >
-                      {aiNotes.length}
-                    </span>
-                  ) : null}
-                  {id === "bookmarks" && bookmarks.length > 0 ? (
-                    <span
-                      className="min-w-[1.1rem] rounded-full border border-neutral-400 px-1 text-[10px] leading-none text-neutral-600"
-                      aria-label={`${bookmarks.length} bookmarks`}
-                    >
-                      {bookmarks.length}
-                    </span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-            {activeTab === "ai" && capturingNotes ? (
-              <p className="text-[10px] text-neutral-500">capturing notes…</p>
-            ) : null}
-          </div>
+        {/* ---- TOGGLE STRIP ---- */}
+        {!boardOpen && (
+          <button
+            type="button"
+            className="flex w-[28px] min-w-[28px] shrink-0 cursor-pointer items-center justify-center border-l border-nh-border bg-nh-surface text-[10px] text-nh-muted transition-colors duration-200 hover:bg-nh-surface-2 hover:text-nh-text"
+            onClick={() => setBoardOpen(true)}
+            aria-expanded={false}
+            aria-label="Show notes"
+          >
+            ‹
+          </button>
+        )}
 
-          <div className="min-h-0 flex-1 overflow-hidden">
-            {activeTab === "ai" && (
-              <ul className="h-full list-none overflow-y-auto p-2">
-                {aiNotes.map((note) => (
-                  <li
-                    key={note.id}
-                    className={`mb-2 border border-neutral-300 bg-white p-2 text-xs ${
-                      note.animate ? "nh-ai-note-enter" : ""
+        {/* ---- NOTES PANEL ---- */}
+        {boardOpen && (
+          <aside
+            className="flex min-h-0 flex-col overflow-hidden border-l border-nh-border bg-nh-bg"
+            style={{ width: panelWidth, minWidth: panelWidth }}
+          >
+            {/* Panel header */}
+            <div className="flex shrink-0 items-center justify-between border-b border-nh-border px-3 py-2">
+              <div className="flex items-center gap-1">
+                {(
+                  [
+                    ["ai", "AI Notes"],
+                    ["my", "My Notes"],
+                    ["bookmarks", "Bookmarks"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`cursor-pointer rounded-lg px-2.5 py-1.5 text-xs transition-colors duration-150 ${
+                      activeTab === id
+                        ? "bg-nh-surface text-nh-text"
+                        : "text-nh-muted hover:text-nh-text"
                     }`}
-                    onAnimationEnd={() => {
-                      if (!note.animate) return;
-                      setAiNotes((prev) =>
-                        prev.map((n) =>
-                          n.id === note.id ? { ...n, animate: undefined } : n,
-                        ),
-                      );
-                    }}
+                    onClick={() => setActiveTab(id)}
                   >
-                    <div className="mb-1.5 flex items-start justify-between gap-2">
-                      <span className="rounded border border-neutral-400 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-neutral-700">
-                        {note.type}
+                    <span>{label}</span>
+                    {id === "ai" && aiNotes.length > 0 ? (
+                      <span className="ml-1 text-[10px] text-nh-dim">
+                        {aiNotes.length}
                       </span>
-                      <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-500">
-                        {formatClock(note.timestamp)}
+                    ) : null}
+                    {id === "bookmarks" && bookmarks.length > 0 ? (
+                      <span className="ml-1 text-[10px] text-nh-dim">
+                        {bookmarks.length}
                       </span>
-                    </div>
-                    <p className="whitespace-pre-wrap text-neutral-800">
-                      {note.content}
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="cursor-pointer rounded-lg p-1.5 text-nh-muted transition-colors duration-150 hover:bg-nh-surface hover:text-nh-text"
+                onClick={() => setBoardOpen(false)}
+                aria-label="Close notes panel"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            {activeTab === "ai" && capturingNotes ? (
+              <div className="flex shrink-0 items-center gap-2 border-b border-nh-border px-3 py-1.5">
+                <div className="h-2 w-2 animate-pulse rounded-full bg-nh-teal" />
+                <p className="text-[10px] text-nh-dim">capturing notes…</p>
+              </div>
+            ) : null}
+
+            {/* Tab content */}
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {/* ---- AI NOTES (categorized) ---- */}
+              {activeTab === "ai" && (
+                <div className="h-full overflow-y-auto p-3">
+                  {NOTE_CATEGORIES.map(({ type, label, color }) => {
+                    const notes = notesByCategory[type];
+                    if (!notes || notes.length === 0) return null;
+                    const collapsed = !!collapsedCategories[type];
+                    return (
+                      <div key={type} className="mb-4">
+                        <button
+                          type="button"
+                          className="mb-2 flex w-full cursor-pointer items-center gap-2 text-left transition-colors duration-150 hover:text-nh-text"
+                          onClick={() => toggleCategory(type)}
+                        >
+                          <span className="text-[10px] text-nh-dim">
+                            {collapsed ? "▸" : "▾"}
+                          </span>
+                          <span className="text-[11px] font-bold uppercase tracking-widest text-nh-muted">
+                            {label}
+                          </span>
+                          <span className="text-[10px] text-nh-dim">
+                            ({notes.length})
+                          </span>
+                        </button>
+                        {!collapsed && (
+                          <ul className="space-y-2">
+                            {notes.map((note) => (
+                              <li
+                                key={note.id}
+                                className={`rounded-xl border border-nh-border border-l-2 ${color} bg-nh-surface p-2.5 text-xs ${
+                                  note.animate ? "nh-ai-note-enter" : ""
+                                }`}
+                                onAnimationEnd={() => {
+                                  if (!note.animate) return;
+                                  setAiNotes((prev) =>
+                                    prev.map((n) =>
+                                      n.id === note.id
+                                        ? { ...n, animate: undefined }
+                                        : n,
+                                    ),
+                                  );
+                                }}
+                              >
+                                <div className="mb-1.5 flex items-center justify-between gap-2">
+                                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-nh-dim">
+                                    {formatClock(note.timestamp)}
+                                  </span>
+                                </div>
+                                <EditableContent
+                                  value={
+                                    note.editedContent ?? note.content
+                                  }
+                                  onChange={(v) =>
+                                    updateNoteContent(note.id, v)
+                                  }
+                                />
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {aiNotes.length === 0 && (
+                    <p className="py-8 text-center text-xs text-nh-dim">
+                      Notes will appear here as you watch.
                     </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {activeTab === "my" && (
-              <textarea
-                className="h-full w-full resize-none border-0 bg-white p-2 text-xs outline-none"
-                placeholder="Your notes…"
-                value={myNotesText}
-                onChange={(e) => setMyNotesText(e.target.value)}
-              />
-            )}
-            {activeTab === "bookmarks" && (
-              <ul className="h-full list-none overflow-y-auto p-2 text-xs">
-                {bookmarks.map((b) => (
-                  <li
-                    key={b.id}
-                    className="mb-1 border border-neutral-300 bg-white px-2 py-1.5"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="text-neutral-800">{b.label}</span>
-                      <span
-                        className="shrink-0 font-mono tabular-nums text-neutral-600"
-                        title={`${b.timestampSeconds} seconds`}
-                      >
-                        {formatBookmarkTime(b.timestampSeconds)}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </aside>
+                  )}
+                </div>
+              )}
+
+              {/* ---- MY NOTES ---- */}
+              {activeTab === "my" && (
+                <textarea
+                  className="h-full w-full resize-none border-0 bg-nh-surface p-3 text-xs leading-relaxed text-nh-text outline-none transition-colors duration-150 placeholder:text-nh-dim focus:bg-nh-surface-2"
+                  placeholder="Your notes…"
+                  value={myNotesText}
+                  onChange={(e) => setMyNotesText(e.target.value)}
+                />
+              )}
+
+              {/* ---- BOOKMARKS ---- */}
+              {activeTab === "bookmarks" && (
+                <ul className="h-full list-none overflow-y-auto p-3 text-xs">
+                  {bookmarks.map((b) => (
+                    <li
+                      key={b.id}
+                      className="mb-1.5 rounded-xl border border-nh-border bg-nh-surface px-3 py-2 transition-colors duration-150 hover:bg-nh-surface-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-nh-text">{b.label}</span>
+                        <span
+                          className="shrink-0 font-mono tabular-nums text-nh-dim"
+                          title={`${b.timestampSeconds} seconds`}
+                        >
+                          {formatBookmarkTime(b.timestampSeconds)}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                  {bookmarks.length === 0 && (
+                    <p className="py-8 text-center text-xs text-nh-dim">
+                      Press <kbd className="rounded border border-nh-border px-1.5 py-0.5 font-mono text-[10px]">B</kbd> to bookmark.
+                    </p>
+                  )}
+                </ul>
+              )}
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   );

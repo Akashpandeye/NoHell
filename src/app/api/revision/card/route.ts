@@ -1,11 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
 import { NextRequest, NextResponse } from "next/server";
 
 import type { TutorialRevisionCard } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "llama-3.3-70b-versatile";
 
 const SYSTEM_PROMPT =
   "You are a learning assistant for junior developers. Respond ONLY in valid JSON.";
@@ -91,10 +91,10 @@ export async function POST(request: NextRequest) {
       ? cumulativeText.slice(0, CONTENT_MAX_CHARS)
       : cumulativeText;
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey?.trim()) {
     return NextResponse.json(
-      { error: "Anthropic API is not configured" },
+      { error: "AI API is not configured" },
       { status: 503 },
     );
   }
@@ -113,23 +113,26 @@ Return ONLY:
 Include 2-3 concepts max.`;
 
   try {
-    const client = new Anthropic({ apiKey });
-    const msg = await client.messages.create({
+    const client = new Groq({ apiKey });
+    const completion = await client.chat.completions.create({
       model: MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
       max_tokens: 2048,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
+      temperature: 0.3,
     });
 
-    const block = msg.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") {
+    const text = completion.choices?.[0]?.message?.content ?? "";
+    if (!text) {
       return NextResponse.json(
         { error: "Empty response from model" },
         { status: 502 },
       );
     }
 
-    const parsed = parseRevisionJson(block.text);
+    const parsed = parseRevisionJson(text);
     const revision_card = normalizeRevisionCard(parsed);
     if (!revision_card) {
       return NextResponse.json(
@@ -140,7 +143,7 @@ Include 2-3 concepts max.`;
 
     return NextResponse.json({ revision_card });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Claude request failed";
+    const message = e instanceof Error ? e.message : "AI request failed";
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

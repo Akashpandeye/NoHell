@@ -1,18 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchTranscript } from "youtube-transcript";
 
 import type { TranscriptLine } from "@/lib/transcript";
-
-function isTranscriptArray(value: unknown): value is TranscriptLine[] {
-  if (!Array.isArray(value)) return false;
-  return value.every(
-    (item) =>
-      item != null &&
-      typeof item === "object" &&
-      typeof (item as TranscriptLine).text === "string" &&
-      typeof (item as TranscriptLine).start === "number" &&
-      typeof (item as TranscriptLine).duration === "number",
-  );
-}
 
 export async function GET(request: NextRequest) {
   const videoId = request.nextUrl.searchParams.get("videoId");
@@ -24,50 +13,30 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const base = process.env.TRANSCRIPT_SERVICE_URL?.replace(/\/$/, "");
-  if (!base) {
-    return NextResponse.json(
-      { error: "Transcript service not configured" },
-      { status: 500 },
-    );
-  }
-
-  const url = `${base}/transcript/${encodeURIComponent(videoId)}`;
-
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      next: { revalidate: 0 },
-    });
+    const raw = await fetchTranscript(videoId.trim());
 
-    if (res.status === 404) {
+    if (!raw || raw.length === 0) {
       return NextResponse.json(
-        { error: "Transcript unavailable", status: 404 },
+        { error: "Transcript unavailable" },
         { status: 404 },
       );
     }
 
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: "Transcript unavailable", status: 404 },
-        { status: 404 },
-      );
-    }
+    const maxOffset = Math.max(...raw.map((e) => e.offset));
+    const isMs = maxOffset > 10_000;
+    const divisor = isMs ? 1000 : 1;
 
-    const data: unknown = await res.json();
+    const lines: TranscriptLine[] = raw.map((entry) => ({
+      text: entry.text ?? "",
+      start: (entry.offset ?? 0) / divisor,
+      duration: (entry.duration ?? 0) / divisor,
+    }));
 
-    if (!isTranscriptArray(data)) {
-      return NextResponse.json(
-        { error: "Transcript unavailable", status: 404 },
-        { status: 404 },
-      );
-    }
-
-    return NextResponse.json(data);
+    return NextResponse.json(lines);
   } catch {
     return NextResponse.json(
-      { error: "Transcript unavailable", status: 404 },
+      { error: "Transcript unavailable" },
       { status: 404 },
     );
   }

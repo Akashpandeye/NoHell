@@ -1,11 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
 import { NextRequest, NextResponse } from "next/server";
 
 import type { SessionRecallQuestion } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "llama-3.3-70b-versatile";
 
 const SYSTEM_PROMPT = "Respond ONLY in valid JSON.";
 
@@ -82,10 +82,10 @@ export async function POST(request: NextRequest) {
   const sessionNotesSlice =
     joined.length > NOTES_MAX_CHARS ? joined.slice(0, NOTES_MAX_CHARS) : joined;
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey?.trim()) {
     return NextResponse.json(
-      { error: "Anthropic API is not configured" },
+      { error: "AI API is not configured" },
       { status: 503 },
     );
   }
@@ -97,26 +97,29 @@ Return ONLY: {recall_questions:[{id, question, hint}]}`;
 
   let recall_questions: SessionRecallQuestion[];
   try {
-    const client = new Anthropic({ apiKey });
-    const msg = await client.messages.create({
+    const client = new Groq({ apiKey });
+    const completion = await client.chat.completions.create({
       model: MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
       max_tokens: 1200,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
+      temperature: 0.3,
     });
 
-    const block = msg.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") {
+    const text = completion.choices?.[0]?.message?.content ?? "";
+    if (!text) {
       return NextResponse.json(
         { error: "Empty response from model" },
         { status: 502 },
       );
     }
 
-    const parsed = parseRecallJson(block.text);
+    const parsed = parseRecallJson(text);
     recall_questions = normalizeRecallQuestions(parsed);
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Claude request failed";
+    const message = e instanceof Error ? e.message : "AI request failed";
     return NextResponse.json({ error: message }, { status: 502 });
   }
 

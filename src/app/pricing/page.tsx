@@ -90,74 +90,85 @@ export default function PricingPage() {
         />
       </header>
 
-      <main className="relative z-10 mx-auto max-w-5xl px-4 py-14 sm:px-6 lg:px-8">
-        <h1 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">
+      <main className="relative z-10 mx-auto flex max-w-lg flex-col items-center px-4 py-14 sm:px-6 lg:px-8">
+        <h1 className="text-center font-display text-3xl font-extrabold tracking-tight sm:text-4xl">
           Choose your path
         </h1>
-        <p className="mt-2 max-w-xl text-sm text-nh-muted">
+        <p className="mt-2 text-center text-sm text-nh-muted">
           You&apos;re all set. Start with free trial or unlock Pro now.
         </p>
 
         {toast ? (
-          <p className="mt-6 rounded-lg border border-nh-teal/40 bg-nh-surface-2 px-4 py-2 text-sm text-nh-teal">
+          <p className="mt-6 w-full rounded-2xl border border-nh-teal/40 bg-nh-surface-2 px-4 py-2 text-center text-sm text-nh-teal">
             {toast}
           </p>
         ) : null}
 
-        <div className="mt-10 grid gap-6 md:grid-cols-2">
-          <section className="relative flex flex-col border-2 border-nh-cta/60 bg-nh-surface-2 p-6 shadow-[0_0_40px_rgba(249,115,22,0.08)]">
-            <h2 className="font-display text-xl font-bold text-nh-cta">
-              Buy Pro plan
-            </h2>
-            <p className="mt-2 font-mono text-3xl font-semibold text-nh-text">
-              ${PRO_PRICE_USD}
-              <span className="text-base font-normal text-nh-muted">/month</span>
-            </p>
-            <p className="mt-4 text-sm text-nh-text">
-              Unlimited sessions, full notes export, and revision history.
-            </p>
-            {user ? (
-              <button
-                type="button"
-                disabled={checkoutBusy || isPro}
-                className="mt-8 w-full rounded-xl bg-nh-cta py-3 text-sm font-bold text-neutral-950 hover:bg-nh-cta-hover disabled:opacity-50"
-                onClick={() => void onUpgrade()}
-              >
-                {isPro
-                  ? "You're already on Pro"
-                  : checkoutBusy
-                    ? "Opening…"
-                    : "Buy Pro plan"}
-              </button>
-            ) : (
-              <Link
-                href="/sign-up"
-                className="mt-8 inline-block w-full rounded-xl bg-nh-cta py-3 text-center text-sm font-bold text-neutral-950 hover:bg-nh-cta-hover"
-              >
-                Sign up to buy Pro
-              </Link>
-            )}
-          </section>
+        <section className="mt-10 w-full rounded-2xl border-2 border-nh-cta/60 bg-nh-surface-2 p-8 shadow-[0_0_60px_rgba(249,115,22,0.06)]">
+          <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.25em] text-nh-cta">
+            Recommended
+          </p>
+          <h2 className="font-display text-2xl font-bold text-nh-text">
+            Pro plan
+          </h2>
+          <p className="mt-3 font-mono text-4xl font-semibold text-nh-text">
+            ${PRO_PRICE_USD}
+            <span className="text-base font-normal text-nh-muted">
+              {" "}/ month
+            </span>
+          </p>
+          <p className="mt-4 text-sm leading-relaxed text-nh-muted">
+            Everything you need to actually retain what you learn.
+          </p>
 
-          <section className="relative flex flex-col border border-nh-border bg-nh-surface p-6">
-            <h2 className="font-display text-xl font-bold text-nh-text">
-              Continue with free trial
-            </h2>
-            <p className="mt-2 text-sm text-nh-muted">
-              Start now with the free plan and upgrade later anytime.
-            </p>
-            <ul className="mt-6 space-y-2 text-sm text-nh-muted">
-              <li>5 sessions / month</li>
-              <li>Basic AI notes</li>
-            </ul>
-            <Link
-              href="/"
-              className="mt-8 inline-block rounded-xl border border-nh-border px-4 py-2 text-center text-sm font-medium hover:border-nh-teal/50"
+          <ul className="mt-6 space-y-3 text-sm text-nh-text">
+            {[
+              "Unlimited learning sessions",
+              "Full AI-generated notes",
+              "Hourly revision cards",
+              "Session recall questions",
+              "Notes export (Markdown)",
+              "Priority support",
+            ].map((f) => (
+              <li key={f} className="flex items-start gap-3">
+                <span className="mt-0.5 text-nh-cta" aria-hidden>
+                  ◆
+                </span>
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+
+          {user ? (
+            <button
+              type="button"
+              disabled={checkoutBusy || isPro}
+              className="mt-8 w-full rounded-xl bg-nh-cta py-3.5 text-sm font-bold text-neutral-950 transition-colors hover:bg-nh-cta-hover disabled:opacity-50"
+              onClick={() => void onUpgrade()}
             >
-              Continue with free trial
+              {isPro
+                ? "You're already on Pro"
+                : checkoutBusy
+                  ? "Opening…"
+                  : "Buy Pro plan"}
+            </button>
+          ) : (
+            <Link
+              href="/sign-up"
+              className="mt-8 inline-block w-full rounded-xl bg-nh-cta py-3.5 text-center text-sm font-bold text-neutral-950 transition-colors hover:bg-nh-cta-hover"
+            >
+              Sign up to buy Pro
             </Link>
-          </section>
-        </div>
+          )}
+        </section>
+
+        <Link
+          href="/"
+          className="mt-5 w-full rounded-2xl border border-nh-border bg-nh-surface px-6 py-4 text-center text-sm text-nh-muted transition-colors hover:border-nh-teal/40 hover:text-nh-text"
+        >
+          Continue with free trial
+          <span className="ml-1.5 text-nh-dim">— 5 sessions / month</span>
+        </Link>
       </main>
     </div>
   );
