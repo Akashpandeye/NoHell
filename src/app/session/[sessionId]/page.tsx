@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  addBookmark as addBookmarkToFirestore,
+  addBookmark as persistBookmark,
   getBookmarks,
   getNotes,
   getSession,
@@ -312,7 +312,7 @@ export default function SessionPage() {
       const sec = elapsedRef.current;
       const label = "Revisit this";
       try {
-        const id = await addBookmarkToFirestore({
+        const id = await persistBookmark({
           sessionId,
           timestampSeconds: sec,
           label,
@@ -325,7 +325,7 @@ export default function SessionPage() {
         setBoardOpen(true);
         setActiveTab("bookmarks");
       } catch {
-        /* Firestore error */
+        /* db error */
       }
     })();
   }, [sessionId]);

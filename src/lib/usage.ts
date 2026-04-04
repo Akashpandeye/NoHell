@@ -1,12 +1,4 @@
-import {
-  doc,
-  getDoc,
-  increment,
-  setDoc,
-  updateDoc,
-} from "firebase/firestore";
-
-import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 
 export type UserPlan = "free" | "pro";
 
@@ -15,26 +7,22 @@ export type UserUsage = {
   plan: UserPlan;
 };
 
-const USERS = "users";
-
-function userRef(userId: string) {
-  return doc(db, USERS, userId);
-}
-
 /**
- * Returns usage for a Clerk user id. Missing docs count as free with 0 sessions.
+ * Returns usage for a Clerk user id. Missing rows count as free with 0 sessions.
  */
 export async function getUserUsage(userId: string): Promise<UserUsage> {
-  const snap = await getDoc(userRef(userId));
-  if (!snap.exists()) {
-    return { sessions_used: 0, plan: "free" };
-  }
-  const d = snap.data() as Record<string, unknown>;
+  const { data: row, error } = await supabase
+    .from("users")
+    .select("sessions_used, plan")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!row) return { sessions_used: 0, plan: "free" };
   const sessions_used =
-    typeof d.sessions_used === "number" && Number.isFinite(d.sessions_used)
-      ? Math.max(0, Math.floor(d.sessions_used))
+    typeof row.sessions_used === "number" && Number.isFinite(row.sessions_used)
+      ? Math.max(0, Math.floor(row.sessions_used))
       : 0;
-  const plan: UserPlan = d.plan === "pro" ? "pro" : "free";
+  const plan: UserPlan = row.plan === "pro" ? "pro" : "free";
   return { sessions_used, plan };
 }
 
@@ -42,17 +30,29 @@ export async function getUserUsage(userId: string): Promise<UserUsage> {
  * Increments sessions_used by 1 after a session is successfully created.
  */
 export async function incrementUsage(userId: string): Promise<void> {
-  const ref = userRef(userId);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, { sessions_used: 1, plan: "free" as const });
+  const { data: row } = await supabase
+    .from("users")
+    .select("sessions_used")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (!row) {
+    const { error } = await supabase
+      .from("users")
+      .insert({ id: userId, sessions_used: 1, plan: "free" as const });
+    if (error) throw new Error(error.message);
     return;
   }
-  await updateDoc(ref, { sessions_used: increment(1) });
+
+  const { error } = await supabase
+    .from("users")
+    .update({ sessions_used: (row.sessions_used ?? 0) + 1 })
+    .eq("id", userId);
+  if (error) throw new Error(error.message);
 }
 
 /**
- * Pro users have unlimited sessions; free users may start while sessions_used &lt; 5.
+ * Pro users have unlimited sessions; free users may start while sessions_used < 5.
  */
 export async function canStartSession(userId: string): Promise<boolean> {
   const { plan, sessions_used } = await getUserUsage(userId);
@@ -63,5 +63,8 @@ export async function canStartSession(userId: string): Promise<boolean> {
  * Marks the user as Pro (e.g. after successful Razorpay payment).
  */
 export async function upgradeToPro(userId: string): Promise<void> {
-  await setDoc(userRef(userId), { plan: "pro" as const }, { merge: true });
+  const { error } = await supabase
+    .from("users")
+    .upsert({ id: userId, plan: "pro" as const });
+  if (error) throw new Error(error.message);
 }

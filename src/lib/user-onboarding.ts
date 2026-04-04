@@ -1,10 +1,6 @@
-import { doc, getDoc, setDoc, Timestamp } from "firebase/firestore";
+import { supabase } from "@/lib/supabase";
 
-import { db } from "@/lib/firebase";
-
-const USERS = "users";
-
-/** Six onboarding fields saved on `users/{userId}`. */
+/** Six onboarding fields saved on `users`. */
 export type OnboardingAnswers = {
   /** Q1 */
   role: string;
@@ -24,13 +20,16 @@ export async function getOnboardingState(userId: string): Promise<{
   completed: boolean;
   answers: OnboardingAnswers | null;
 }> {
-  const snap = await getDoc(doc(db, USERS, userId));
-  if (!snap.exists()) {
-    return { completed: false, answers: null };
-  }
-  const d = snap.data() as Record<string, unknown>;
-  const completed = d.onboardingCompleted === true;
-  const raw = d.onboardingAnswers;
+  const { data: row, error } = await supabase
+    .from("users")
+    .select("onboarding_completed, onboarding_answers")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!row) return { completed: false, answers: null };
+
+  const completed = row.onboarding_completed === true;
+  const raw = row.onboarding_answers;
   if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
     return { completed, answers: raw as OnboardingAnswers };
   }
@@ -41,13 +40,11 @@ export async function saveOnboarding(
   userId: string,
   answers: OnboardingAnswers,
 ): Promise<void> {
-  await setDoc(
-    doc(db, USERS, userId),
-    {
-      onboardingCompleted: true,
-      onboardingAnswers: answers,
-      onboardingCompletedAt: Timestamp.now(),
-    },
-    { merge: true },
-  );
+  const { error } = await supabase.from("users").upsert({
+    id: userId,
+    onboarding_completed: true,
+    onboarding_answers: answers,
+    onboarding_completed_at: new Date().toISOString(),
+  });
+  if (error) throw new Error(error.message);
 }

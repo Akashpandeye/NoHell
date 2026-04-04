@@ -89,8 +89,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error:
-          message ||
-          "Could not save onboarding. Set FIREBASE_SERVICE_ACCOUNT_JSON on the server (recommended) or use permissive Firestore rules for development.",
+          message || "Could not save onboarding. Check your Supabase credentials.",
       },
       { status: 503 },
     );
