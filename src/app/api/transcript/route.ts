@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchTranscript } from "youtube-transcript";
 
-import type { TranscriptLine } from "@/lib/transcript";
+import { fetchYouTubeTranscriptLines } from "@/lib/fetch-youtube-transcript";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+/** Groq / transcript can exceed default hobby timeout; Pro allows up to 60s. */
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   const videoId = request.nextUrl.searchParams.get("videoId");
@@ -13,31 +17,13 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  try {
-    const raw = await fetchTranscript(videoId.trim());
-
-    if (!raw || raw.length === 0) {
-      return NextResponse.json(
-        { error: "Transcript unavailable" },
-        { status: 404 },
-      );
-    }
-
-    const maxOffset = Math.max(...raw.map((e) => e.offset));
-    const isMs = maxOffset > 10_000;
-    const divisor = isMs ? 1000 : 1;
-
-    const lines: TranscriptLine[] = raw.map((entry) => ({
-      text: entry.text ?? "",
-      start: (entry.offset ?? 0) / divisor,
-      duration: (entry.duration ?? 0) / divisor,
-    }));
-
-    return NextResponse.json(lines);
-  } catch {
+  const result = await fetchYouTubeTranscriptLines(videoId);
+  if (!result.ok) {
     return NextResponse.json(
       { error: "Transcript unavailable" },
       { status: 404 },
     );
   }
+
+  return NextResponse.json(result.lines);
 }

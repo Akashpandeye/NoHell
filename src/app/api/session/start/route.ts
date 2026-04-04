@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 import { NextRequest, NextResponse } from "next/server";
 
+import { fetchYouTubeTranscriptLines } from "@/lib/fetch-youtube-transcript";
 import {
   splitTranscriptByTime,
   type TranscriptChunk,
@@ -9,6 +10,8 @@ import {
 import type { Checkpoint } from "@/types";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const MODEL = "llama-3.3-70b-versatile";
 const SYSTEM_PROMPT =
@@ -127,39 +130,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const origin = request.nextUrl.origin;
-  let transcript: TranscriptLine[];
-  try {
-    const tRes = await fetch(
-      `${origin}/api/transcript?videoId=${encodeURIComponent(videoId)}`,
-      { method: "GET", headers: { Accept: "application/json" } },
-    );
-    if (!tRes.ok) {
-      const err = await tRes.json().catch(() => ({}));
-      const status = tRes.status === 404 ? 404 : 502;
-      return NextResponse.json(
-        {
-          error:
-            typeof err === "object" && err && "error" in err
-              ? (err as { error: string }).error
-              : "Transcript unavailable",
-        },
-        { status },
-      );
-    }
-    transcript = (await tRes.json()) as TranscriptLine[];
-    if (!Array.isArray(transcript)) {
-      return NextResponse.json(
-        { error: "Transcript unavailable" },
-        { status: 404 },
-      );
-    }
-  } catch {
+  const tResult = await fetchYouTubeTranscriptLines(videoId);
+  if (!tResult.ok) {
     return NextResponse.json(
-      { error: "Failed to fetch transcript" },
-      { status: 502 },
+      { error: "Transcript unavailable" },
+      { status: 404 },
     );
   }
+  const transcript: TranscriptLine[] = tResult.lines;
 
   const chunked: TranscriptChunk[] = splitTranscriptByTime(transcript, 5);
   const preview = firstNWordsFromTranscript(transcript, 500);

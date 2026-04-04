@@ -2,6 +2,9 @@
   "name": "nohell",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "clean": "rm -rf .next",
     "clean:all": "rm -rf .next node_modules/.cache",

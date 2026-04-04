@@ -236,7 +236,7 @@ export function Landing() {
                         setMessage("");
                       }
                     }}
-                    onKeyDown={(e) => {
+                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
                         handleUrlNext();

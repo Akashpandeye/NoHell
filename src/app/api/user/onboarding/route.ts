@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import type { UserLearningProfile } from "@/types";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 function isAnswers(v: unknown): v is UserLearningProfile {
   if (typeof v !== "object" || v === null) return false;

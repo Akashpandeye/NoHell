@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SessionRecallQuestion } from "@/types";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const MODEL = "llama-3.3-70b-versatile";
 
