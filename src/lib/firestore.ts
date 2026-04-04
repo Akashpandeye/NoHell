@@ -216,6 +216,24 @@ export async function getBookmarks(sessionId: string): Promise<Bookmark[]> {
   return (rows ?? []).map((r) => rowToBookmark(r));
 }
 
+export async function deleteBookmark(bookmarkId: string): Promise<void> {
+  const { error } = await supabase.from("bookmarks").delete().eq("id", bookmarkId);
+  if (error) throw new Error(error.message);
+}
+
+export async function updateBookmarkLabel(
+  bookmarkId: string,
+  label: string,
+): Promise<void> {
+  const trimmed = label.trim();
+  if (!trimmed) throw new Error("Label cannot be empty");
+  const { error } = await supabase
+    .from("bookmarks")
+    .update({ label: trimmed })
+    .eq("id", bookmarkId);
+  if (error) throw new Error(error.message);
+}
+
 export async function getUserProfile(
   userId: string,
 ): Promise<UserProfileDoc | null> {
