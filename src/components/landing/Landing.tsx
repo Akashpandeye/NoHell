@@ -204,9 +204,6 @@ export function Landing() {
         className="relative z-10 flex flex-1 flex-col items-center justify-center px-4 py-16 sm:px-6 sm:py-20 lg:px-8"
       >
         <div className="mx-auto flex w-full max-w-2xl flex-col items-center text-center">
-          <p className="mb-5 font-display text-[11px] font-bold uppercase tracking-[0.4em] text-nh-teal">
-            NoHell
-          </p>
           <h1 className="font-display text-4xl font-extrabold leading-[1.06] tracking-[-0.04em] text-nh-text sm:text-5xl lg:text-[3.35rem]">
             Skip tutorial hell.
             <br />
@@ -402,9 +399,13 @@ export function Landing() {
       <footer className="relative z-10 border-t border-nh-border/40 px-4 py-6 sm:px-6 lg:px-8">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 text-center text-xs text-nh-dim sm:flex-row sm:text-left">
           <p>NoHell — focus and skip tutorial hell.</p>
-          <p className="text-nh-muted">
-            Landing preview · Product in development
-          </p>
+          <div className="flex items-center gap-3 text-nh-muted">
+            <p>Landing preview · Product in development</p>
+            <span aria-hidden>·</span>
+            <Link href="/privacy-policy" className="underline decoration-nh-border/70 underline-offset-4 hover:text-nh-text">
+              Privacy Policy
+            </Link>
+          </div>
         </div>
       </footer>
     </div>
