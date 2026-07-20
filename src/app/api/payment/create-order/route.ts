@@ -1,5 +1,6 @@
+import { auth } from "@clerk/nextjs/server";
 import Razorpay from "razorpay";
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
 import {
   PRO_AMOUNT_MINOR_UNITS,
@@ -10,27 +11,14 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-type Body = {
-  userId?: string;
-};
-
 function receiptId(userId: string): string {
   const base = `nohell_pro_${userId}`.replace(/[^a-zA-Z0-9_]/g, "_");
   return base.length <= 40 ? base : base.slice(0, 40);
 }
 
-export async function POST(request: NextRequest) {
-  let body: Body;
-  try {
-    body = (await request.json()) as Body;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-
-  const userId = typeof body.userId === "string" ? body.userId.trim() : "";
-  if (!userId) {
-    return NextResponse.json({ error: "userId is required" }, { status: 400 });
-  }
+export async function POST() {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const keyId = process.env.RAZORPAY_KEY_ID?.trim();
   const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
@@ -48,7 +36,14 @@ export async function POST(request: NextRequest) {
     process.env.RAZORPAY_ORDER_CURRENCY?.trim().toUpperCase() || PRO_CURRENCY;
   const envMinor = process.env.RAZORPAY_ORDER_AMOUNT_MINOR?.trim();
   const parsed = envMinor ? Number.parseInt(envMinor, 10) : NaN;
-  const amount = Number.isFinite(parsed) && parsed > 0 ? parsed : PRO_AMOUNT_MINOR_UNITS;
+  const hasValidConfiguredAmount = Number.isSafeInteger(parsed) && parsed >= 100;
+  if (envMinor && !hasValidConfiguredAmount) {
+    return NextResponse.json(
+      { error: "Razorpay order amount must be at least 100 minor units" },
+      { status: 400 },
+    );
+  }
+  const amount = hasValidConfiguredAmount ? parsed : PRO_AMOUNT_MINOR_UNITS;
 
   try {
     const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
@@ -68,6 +63,13 @@ export async function POST(request: NextRequest) {
   } catch (e) {
     const message =
       e instanceof Error ? e.message : "Failed to create Razorpay order";
-    return NextResponse.json({ error: message }, { status: 502 });
+    const razorpayStatus =
+      typeof e === "object" && e && "statusCode" in e
+        ? (e as { statusCode?: unknown }).statusCode
+        : undefined;
+    return NextResponse.json(
+      { error: message },
+      { status: razorpayStatus === 401 ? 401 : 500 },
+    );
   }
 }

@@ -1,15 +1,14 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 /**
- * Opt-in protection only (recommended by Clerk).
- * An “invert” list (public routes + protect everything else) breaks sign-out:
- * Clerk’s server actions / RSC requests during logout can hit URLs that are not
- * in the public list and get `auth.protect()` → 404 or a broken state.
- *
- * Add patterns here for routes that require a session (e.g. `/app(.*)`).
- * `/`, `/sign-in`, `/sign-up`, and everything else stay public until listed.
+ * UI protection is intentionally opt-in. API handlers still authenticate and
+ * authorize every resource themselves; middleware is only an early UX guard.
  */
-const isProtectedRoute = createRouteMatcher([]);
+const isProtectedRoute = createRouteMatcher([
+  "/onboarding(.*)",
+  "/session(.*)",
+  "/pricing(.*)",
+]);
 
 export default clerkMiddleware(async (auth, request) => {
   if (isProtectedRoute(request)) {

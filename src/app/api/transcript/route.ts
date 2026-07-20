@@ -1,29 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { fetchYouTubeTranscriptLines } from "@/lib/fetch-youtube-transcript";
+import { getOwnedSession, isUuid, UnauthorizedError } from "@/lib/server/authz";
+import { resolveVideoTranscript } from "@/lib/server-transcripts";
+import type { TranscriptResolution } from "@/lib/transcript";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-/** Groq / transcript can exceed default hobby timeout; Pro allows up to 60s. */
-export const maxDuration = 60;
+export const maxDuration = 30;
 
+function responseFor(result: TranscriptResolution): NextResponse {
+  const headers = new Headers({
+    "Cache-Control": "private, no-store",
+    Deprecation: "true",
+    Link: '</api/sessions/{sessionId}/transcript>; rel="successor-version"',
+  });
+  if (result.status === "fetching") {
+    headers.set("Retry-After", String(result.retryAfterSeconds));
+    return NextResponse.json(result, { status: 202, headers });
+  }
+  if (result.status === "unavailable") {
+    return NextResponse.json(result, { status: 404, headers });
+  }
+  if (result.status === "failed") {
+    return NextResponse.json(result, { status: 503, headers });
+  }
+  return NextResponse.json(result, { status: 200, headers });
+}
+
+/** @deprecated Use `/api/sessions/[sessionId]/transcript`. */
 export async function GET(request: NextRequest) {
-  const videoId = request.nextUrl.searchParams.get("videoId");
-
-  if (!videoId?.trim()) {
+  const sessionId = request.nextUrl.searchParams.get("sessionId")?.trim() ?? "";
+  if (!isUuid(sessionId)) {
     return NextResponse.json(
-      { error: "Missing videoId query parameter" },
-      { status: 400 },
+      { error: "A valid sessionId query parameter is required" },
+      { status: 400, headers: { Deprecation: "true" } },
     );
   }
 
-  const result = await fetchYouTubeTranscriptLines(videoId);
-  if (!result.ok) {
+  try {
+    const session = await getOwnedSession(sessionId);
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+    return responseFor(await resolveVideoTranscript(session.videoId));
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     return NextResponse.json(
-      { error: "Transcript unavailable" },
-      { status: 404 },
+      { error: "Transcript service is temporarily unavailable" },
+      { status: 503 },
     );
   }
-
-  return NextResponse.json(result.lines);
 }

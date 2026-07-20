@@ -3,7 +3,7 @@
 import { AuthNav } from "@/components/auth/AuthNav";
 import { AimMark } from "@/components/brand/AimMark";
 import { openRazorpayCheckout } from "@/lib/razorpay-checkout";
-import { PRO_PRICE_USD } from "@/lib/pricing";
+import { PRO_PRICE_INR } from "@/lib/pricing";
 import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -46,7 +46,6 @@ export default function PricingPage() {
     setToast(null);
     try {
       await openRazorpayCheckout({
-        userId: user.id,
         email: user.primaryEmailAddress?.emailAddress,
         onSuccess: () => {
           setPlan("pro");
@@ -112,7 +111,7 @@ export default function PricingPage() {
             Pro plan
           </h2>
           <p className="mt-3 font-mono text-4xl font-semibold text-nh-text">
-            ${PRO_PRICE_USD}
+            ₹{PRO_PRICE_INR}
             <span className="text-base font-normal text-nh-muted">
               {" "}/ month
             </span>

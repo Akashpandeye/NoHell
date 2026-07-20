@@ -1,17 +1,20 @@
-import Groq from "groq-sdk";
+import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  completeWithOpenRouter,
+  isOpenRouterConfigured,
+} from "@/lib/ai/openrouter";
+import { isUuid } from "@/lib/server/authz";
 import type { SessionRecallQuestion } from "@/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MODEL = "llama-3.3-70b-versatile";
-
 const SYSTEM_PROMPT = "Respond ONLY in valid JSON.";
 
-const NOTES_MAX_CHARS = 500;
+const NOTES_MAX_CHARS = 8_000;
 
 type Body = {
   sessionId?: string;
@@ -24,21 +27,6 @@ function parseRecallJson(text: string): unknown {
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const jsonStr = fenced ? fenced[1]!.trim() : trimmed;
   return JSON.parse(jsonStr) as unknown;
-}
-
-function collectNoteStrings(notes: unknown): string[] {
-  if (!Array.isArray(notes)) return [];
-  const out: string[] = [];
-  for (const n of notes) {
-    if (typeof n === "string") {
-      const t = n.trim();
-      if (t) out.push(t);
-    } else if (typeof n === "object" && n !== null && "content" in n) {
-      const c = (n as { content?: unknown }).content;
-      if (typeof c === "string" && c.trim()) out.push(c.trim());
-    }
-  }
-  return out;
 }
 
 function normalizeRecallQuestions(raw: unknown): SessionRecallQuestion[] {
@@ -66,6 +54,9 @@ function normalizeRecallQuestions(raw: unknown): SessionRecallQuestion[] {
 }
 
 export async function POST(request: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   let body: Body;
   try {
     body = (await request.json()) as Body;
@@ -75,17 +66,19 @@ export async function POST(request: NextRequest) {
 
   const sessionId =
     typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-  if (!sessionId) {
-    return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
+  if (!isUuid(sessionId)) {
+    return NextResponse.json({ error: "A valid sessionId is required" }, { status: 400 });
   }
 
-  const contents = collectNoteStrings(body.notes);
-  const joined = contents.join(". ");
-  const sessionNotesSlice =
-    joined.length > NOTES_MAX_CHARS ? joined.slice(0, NOTES_MAX_CHARS) : joined;
+  const { serverGetNotesForUser, serverUpdateSessionForUser } = await import("@/lib/server-firestore");
+  const notes = await serverGetNotesForUser(sessionId, userId);
+  if (!notes) return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey?.trim()) {
+  const contents = notes.map((note) => note.content.trim()).filter(Boolean);
+  const joined = contents.join("\n\n");
+  const sessionNotesSlice = joined.length > NOTES_MAX_CHARS ? joined.slice(-NOTES_MAX_CHARS) : joined;
+
+  if (!isOpenRouterConfigured()) {
     return NextResponse.json(
       { error: "AI API is not configured" },
       { status: 503 },
@@ -99,24 +92,10 @@ Return ONLY: {recall_questions:[{id, question, hint}]}`;
 
   let recall_questions: SessionRecallQuestion[];
   try {
-    const client = new Groq({ apiKey });
-    const completion = await client.chat.completions.create({
-      model: MODEL,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userPrompt },
-      ],
-      max_tokens: 1200,
-      temperature: 0.3,
-    });
-
-    const text = completion.choices?.[0]?.message?.content ?? "";
-    if (!text) {
-      return NextResponse.json(
-        { error: "Empty response from model" },
-        { status: 502 },
-      );
-    }
+    const text = await completeWithOpenRouter([
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ], { maxTokens: 1200, temperature: 0.3 });
 
     const parsed = parseRecallJson(text);
     recall_questions = normalizeRecallQuestions(parsed);
@@ -126,8 +105,8 @@ Return ONLY: {recall_questions:[{id, question, hint}]}`;
   }
 
   try {
-    const { serverUpdateSession } = await import("@/lib/server-firestore");
-    await serverUpdateSession(sessionId, { recallQuestions: recall_questions });
+    const updated = await serverUpdateSessionForUser(sessionId, userId, { recallQuestions: recall_questions });
+    if (!updated) return NextResponse.json({ error: "Session not found" }, { status: 404 });
   } catch (e) {
     const message =
       e instanceof Error ? e.message : "Failed to save recall questions";

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { useUser } from "@clerk/nextjs";
 import { ArrowRight, ChevronLeft } from "lucide-react";
@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 
 import { AuthNav } from "@/components/auth/AuthNav";
 import { UpgradeModal } from "@/components/billing/UpgradeModal";
+import type { Session } from "@/types";
 
 import { AimMark } from "../brand/AimMark";
 
@@ -46,7 +47,33 @@ export function Landing() {
   const [message, setMessage] = useState("");
   const [starting, setStarting] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
+  const [continueSessions, setContinueSessions] = useState<Session[]>([]);
   const pendingStep = useRef<Step | null>(null);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setContinueSessions([]);
+      return;
+    }
+
+    let cancelled = false;
+    void fetch("/api/sessions")
+      .then(async (res) => {
+        if (!res.ok) return [];
+        const data = await res.json() as { sessions?: Session[] };
+        return Array.isArray(data.sessions) ? data.sessions : [];
+      })
+      .then((sessions) => {
+        if (!cancelled) setContinueSessions(sessions);
+      })
+      .catch(() => {
+        if (!cancelled) setContinueSessions([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   const transitionTo = useCallback(
     (next: Step) => {
@@ -112,14 +139,13 @@ export function Landing() {
         body: JSON.stringify({
           videoId,
           goal: goalTrimmed,
-          userId: user.id,
+          idempotencyKey: crypto.randomUUID(),
         }),
       });
       const data = (await res.json()) as {
         error?: string;
         code?: string;
         sessionId?: string;
-        transcriptUnavailable?: boolean;
       };
 
       if (res.status === 403 && data.code === "LIMIT_REACHED") {
@@ -136,13 +162,6 @@ export function Landing() {
       }
 
       if (data.sessionId) {
-        if (data.transcriptUnavailable) {
-          try {
-            sessionStorage.setItem(`nh-tx-${data.sessionId}`, "1");
-          } catch {
-            /* private mode / disabled */
-          }
-        }
         router.push(`/session/${data.sessionId}`);
         return;
       }
@@ -198,6 +217,23 @@ export function Landing() {
           className="mx-auto mt-4 h-px max-w-6xl bg-gradient-to-r from-transparent via-nh-border to-transparent px-4 sm:px-6 lg:px-8"
         />
       </header>
+
+      {continueSessions.length > 0 ? (
+        <div className="relative z-10 mx-auto w-full max-w-6xl px-4 pt-5 sm:px-6 lg:px-8">
+          <Link
+            href={`/session/${continueSessions[0]!.id}`}
+            className="group inline-flex flex-col rounded-xl border border-nh-border bg-nh-surface px-3 py-2.5 transition-colors hover:border-nh-teal/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nh-teal/50"
+            aria-label="Continue learning from where you left off"
+          >
+            <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-nh-dim">
+              Pick up where you left off
+            </span>
+            <span className="font-display text-sm font-bold text-nh-text transition-colors group-hover:text-nh-teal">
+              Continue learning
+            </span>
+          </Link>
+        </div>
+      ) : null}
 
       <main
         id="main"

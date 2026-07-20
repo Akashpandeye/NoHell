@@ -7,7 +7,13 @@ export type CreateOrderResponse = {
 
 declare global {
   interface Window {
-    Razorpay?: new (opts: Record<string, unknown>) => { open: () => void };
+    Razorpay?: new (opts: Record<string, unknown>) => {
+      on: (
+        event: "payment.failed",
+        listener: (response: { error?: { description?: string } }) => void,
+      ) => void;
+      open: () => void;
+    };
   }
 }
 
@@ -29,7 +35,6 @@ function loadRazorpayScript(): Promise<void> {
 }
 
 export type RazorpayCheckoutParams = {
-  userId: string;
   email: string | undefined;
   onSuccess: () => void;
   onFailure?: (message: string) => void;
@@ -41,11 +46,17 @@ export type RazorpayCheckoutParams = {
 export async function openRazorpayCheckout(
   params: RazorpayCheckoutParams,
 ): Promise<void> {
-  const res = await fetch("/api/payment/create-order", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId: params.userId }),
-  });
+  let res: Response;
+  try {
+    res = await fetch("/api/payment/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch {
+    params.onFailure?.("Could not start checkout");
+    return;
+  }
 
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
@@ -82,25 +93,34 @@ export async function openRazorpayCheckout(
       razorpay_payment_id: string;
       razorpay_signature: string;
     }) {
-      const verify = await fetch("/api/payment/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          razorpay_order_id: response.razorpay_order_id,
-          razorpay_payment_id: response.razorpay_payment_id,
-          razorpay_signature: response.razorpay_signature,
-          userId: params.userId,
-        }),
-      });
-      const data = (await verify.json()) as { success?: boolean };
-      if (data.success) {
-        params.onSuccess();
-      } else {
-        params.onFailure?.("Payment verification failed");
+      try {
+        const verify = await fetch("/api/payment/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature,
+          }),
+        });
+        const data = (await verify.json()) as { success?: boolean };
+        if (data.success) {
+          params.onSuccess();
+        } else {
+          params.onFailure?.("Payment verification failed");
+        }
+      } catch {
+        params.onFailure?.("Payment verification could not be completed");
       }
+    },
+    modal: {
+      ondismiss: () => params.onFailure?.("Payment cancelled"),
     },
   };
 
   const instance = new Rzp(options);
+  instance.on("payment.failed", (response) => {
+    params.onFailure?.(response.error?.description ?? "Payment failed");
+  });
   instance.open();
 }

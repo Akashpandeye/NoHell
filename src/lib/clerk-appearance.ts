@@ -13,20 +13,25 @@ export const clerkAppearance = {
     /** Default + muted copy (labels like “Email address” / “Password” use muted foreground in Clerk v5). */
     colorForeground: "#ffffff",
     colorMutedForeground: "#ffffff",
+    /** Default input text is white (OTP / verify). Email+password override to black below. */
     colorInputText: "#ffffff",
     colorInputForeground: "#ffffff",
     colorText: "#ffffff",
     colorTextSecondary: "#ffffff",
     colorNeutral: "#1f2e2c",
     borderRadius: "0.75rem",
+    fontFamily:
+      '"Berkeley Mono", var(--font-ibm-plex-mono), "IBM Plex Mono", ui-monospace, monospace',
+    fontFamilyButtons:
+      '"Berkeley Mono", var(--font-ibm-plex-mono), "IBM Plex Mono", ui-monospace, monospace',
   },
   elements: {
-    rootBox: "w-full mx-auto",
-    card: "bg-transparent shadow-none border-0 p-0 gap-6 w-full",
+    rootBox: "w-full mx-auto !text-white",
+    card: "bg-transparent shadow-none border-0 p-0 gap-6 w-full !text-white",
     header: "gap-1",
     headerTitle: "sr-only",
     headerSubtitle: "sr-only",
-    main: "gap-5",
+    main: "gap-5 !text-white",
     socialButtonsRoot: "gap-2.5",
     socialButtonsBlockButton:
       "!text-white [color:#ffffff!important] rounded-xl border-2 border-white/20 bg-nh-surface-2 hover:bg-nh-surface hover:border-nh-teal/40 transition-colors duration-200 [&_span]:!text-white",
@@ -39,27 +44,39 @@ export const clerkAppearance = {
     dividerLine: "bg-nh-border",
     dividerText: "text-white text-xs uppercase tracking-wider",
     formFieldRow: "gap-2 [&_label]:!text-white",
-    formFieldLabel: "!text-white text-sm font-medium",
-    formFieldLabelRow: "text-white [&_span]:!text-white",
+    formFieldLabel: "!text-white text-sm font-medium [color:#ffffff!important]",
+    formFieldLabelRow: "!text-white [&_span]:!text-white",
     formFieldInput:
-      "bg-nh-bg border-nh-border text-white placeholder:text-white/55 rounded-xl border focus:border-nh-teal focus:ring-2 focus:ring-nh-teal/25 transition-shadow duration-200",
+      "bg-nh-bg border-nh-border !text-white placeholder:!text-white/55 rounded-xl border focus:border-nh-teal focus:ring-2 focus:ring-nh-teal/25 transition-shadow duration-200 [color:#ffffff!important]",
+    /** Sign-up / sign-in credential fields only — keep typed value black. */
+    formFieldInput__emailAddress:
+      "!text-black placeholder:!text-black/55 [color:#000000!important]",
+    formFieldInput__password:
+      "!text-black placeholder:!text-black/55 [color:#000000!important]",
     formFieldInputShowPasswordButton: "text-white hover:text-white/90",
     formButtonPrimary:
       "bg-nh-cta hover:bg-nh-cta-hover text-neutral-950 font-bold rounded-xl shadow-none transition-colors duration-200",
-    formButtonReset: "text-white hover:text-white/90",
-    footer: "mt-8 border-t border-nh-border/60 pt-6",
-    footerAction: "gap-1",
-    footerActionText: "text-white text-sm",
+    formButtonReset: "!text-white hover:!text-white/90 [color:#ffffff!important]",
+    // Force a dark footer: Clerk can otherwise retain a light footer surface
+    // when its hosted component styles load after the local dark appearance.
+    footer: "!mt-8 !border-t !border-nh-border/60 !bg-[#0c1413] !pt-6",
+    footerAction: "gap-1 !bg-[#0c1413]",
+    footerActionText: "!text-[#ecfdf5] text-sm",
     footerActionLink:
-      "text-white font-semibold hover:text-white/90 underline-offset-2 hover:underline transition-colors",
-    identityPreviewText: "text-white",
-    identityPreviewEditButton: "text-white hover:text-white/90",
+      "!text-[#5eead4] font-semibold hover:!text-[#99f6e4] underline-offset-2 hover:underline transition-colors",
+    identityPreview: "!text-white",
+    identityPreviewText: "!text-white [color:#ffffff!important]",
+    identityPreviewEditButton: "!text-white hover:!text-white/90 [color:#ffffff!important]",
     formFieldErrorText: "text-orange-300 text-sm",
     formFieldSuccessText: "text-emerald-400 text-sm",
-    alertText: "text-sm text-white",
+    alertText: "text-sm !text-white [color:#ffffff!important]",
+    /** Verify-email OTP boxes — white digits on dark shell. */
     otpCodeFieldInput:
-      "bg-nh-bg border-nh-border text-white rounded-xl border focus:border-nh-teal",
-    formResendCodeLink: "text-white hover:text-white/90",
+      "bg-nh-bg border-nh-border !text-white rounded-xl border focus:border-nh-teal [color:#ffffff!important] caret-white",
+    otpCodeFieldInputs: "!text-white",
+    formResendCodeLink: "!text-white hover:!text-white/90 [color:#ffffff!important]",
+    alternativeMethodsBlockButton: "!text-white [color:#ffffff!important]",
+    alternativeMethodsBlockButtonText: "!text-white [color:#ffffff!important]",
     spinner: "text-nh-teal",
 
     userButtonPopoverCard: "border border-nh-border bg-nh-surface shadow-xl",

@@ -1,165 +1,307 @@
-import { fetchTranscript } from "youtube-transcript";
+import {
+  fetchTranscript,
+  YoutubeTranscriptDisabledError,
+  YoutubeTranscriptNotAvailableError,
+  YoutubeTranscriptNotAvailableLanguageError,
+  YoutubeTranscriptTooManyRequestError,
+  YoutubeTranscriptVideoUnavailableError,
+} from "youtube-transcript";
 
-import type { TranscriptLine } from "@/lib/transcript";
+import {
+  normalizeTranscriptLines,
+  type TranscriptError,
+  type TranscriptFetchOutcome,
+} from "@/lib/transcript";
 
-/** Modern desktop Chrome UA — some datacenter blocks are looser than default Node fetch. */
 const SERVER_FETCH_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const EXTERNAL_PROVIDER_TIMEOUT_MS = 12_000;
+const DIRECT_PROVIDER_TIMEOUT_MS = 12_000;
 
-const EXTERNAL_TRANSCRIPT_PROVIDER_URL =
-  process.env.YOUTUBE_TRANSCRIPT_PROVIDER_URL?.trim() ?? "";
-const EXTERNAL_TRANSCRIPT_PROVIDER_TOKEN =
-  process.env.YOUTUBE_TRANSCRIPT_PROVIDER_TOKEN?.trim() ?? "";
-
-/**
- * youtube-transcript uses `fetch` for InnerTube + caption XML. Node/Vercel defaults are
- * often blocked; browser-like headers slightly improve success rates.
- */
-function youtubeCompatibleFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> {
-  const h = new Headers(init?.headers);
-  if (!h.has("User-Agent")) {
-    h.set("User-Agent", SERVER_FETCH_UA);
-  }
-  if (!h.has("Accept-Language")) {
-    h.set("Accept-Language", "en-US,en;q=0.9");
-  }
-  return fetch(input, {
-    ...init,
-    headers: h,
-    cache: "no-store",
-  });
+function providerConfig() {
+  return {
+    url: process.env.YOUTUBE_TRANSCRIPT_PROVIDER_URL?.trim() ?? "",
+    token: process.env.YOUTUBE_TRANSCRIPT_PROVIDER_TOKEN?.trim() ?? "",
+  };
 }
 
-function toFiniteNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
+function error(
+  code: TranscriptError["code"],
+  message: string,
+  retryable: boolean,
+  provider: NonNullable<TranscriptError["provider"]>,
+): TranscriptError {
+  return { code, message, retryable, provider };
 }
 
-function normalizeTranscriptLines(value: unknown): TranscriptLine[] {
-  if (!Array.isArray(value)) return [];
+function directFallbackAllowed(): boolean {
+  const configured = process.env.YOUTUBE_TRANSCRIPT_ALLOW_DIRECT_FALLBACK
+    ?.trim()
+    .toLowerCase();
+  if (configured === "true" || configured === "1" || configured === "yes") return true;
+  if (configured === "false" || configured === "0" || configured === "no") return false;
 
-  const lines: TranscriptLine[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const row = entry as Record<string, unknown>;
-    const text =
-      typeof row.text === "string"
-        ? row.text.trim()
-        : typeof row.content === "string"
-          ? row.content.trim()
-          : "";
-    if (!text) continue;
+  return !(process.env.NODE_ENV === "production" && process.env.VERCEL === "1");
+}
 
-    const start =
-      toFiniteNumber(row.start) ??
-      toFiniteNumber(row.offset) ??
-      toFiniteNumber(row.start_seconds) ??
-      0;
-    const duration =
-      toFiniteNumber(row.duration) ??
-      toFiniteNumber(row.duration_seconds) ??
-      0;
-
-    lines.push({
-      text,
-      start: Math.max(0, start),
-      duration: Math.max(0, duration),
-    });
-  }
-
-  return lines;
+function extractProviderLines(payload: unknown): unknown {
+  if (typeof payload !== "object" || payload === null) return payload;
+  const row = payload as Record<string, unknown>;
+  if (Array.isArray(row.lines)) return row.lines;
+  if (Array.isArray(row.transcript)) return row.transcript;
+  return payload;
 }
 
 async function fetchTranscriptFromExternalProvider(
   videoId: string,
-): Promise<{ ok: true; lines: TranscriptLine[] } | { ok: false }> {
-  if (!EXTERNAL_TRANSCRIPT_PROVIDER_URL) return { ok: false };
+): Promise<TranscriptFetchOutcome | null> {
+  const config = providerConfig();
+  if (!config.url) return null;
+
+  let url: URL;
+  try {
+    url = new URL(config.url);
+  } catch {
+    return {
+      ok: false,
+      error: error(
+        "provider_not_configured",
+        "The external transcript provider URL is invalid.",
+        false,
+        "external",
+      ),
+    };
+  }
+  url.searchParams.set("videoId", videoId);
+
+  const headers = new Headers({
+    Accept: "application/json",
+    "User-Agent": SERVER_FETCH_UA,
+  });
+  if (config.token) headers.set("Authorization", `Bearer ${config.token}`);
 
   try {
-    const url = new URL(EXTERNAL_TRANSCRIPT_PROVIDER_URL);
-    url.searchParams.set("videoId", videoId);
-
-    const headers = new Headers({
-      Accept: "application/json",
-      "User-Agent": SERVER_FETCH_UA,
-    });
-    if (EXTERNAL_TRANSCRIPT_PROVIDER_TOKEN) {
-      headers.set(
-        "Authorization",
-        `Bearer ${EXTERNAL_TRANSCRIPT_PROVIDER_TOKEN}`,
-      );
-    }
-
-    const res = await fetch(url, {
+    const response = await fetch(url, {
       method: "GET",
       headers,
       cache: "no-store",
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(EXTERNAL_PROVIDER_TIMEOUT_MS),
     });
-    if (!res.ok) return { ok: false };
 
-    const payload = (await res.json()) as unknown;
+    if (response.status === 404 || response.status === 410) {
+      return {
+        ok: false,
+        error: error(
+          "transcript_not_found",
+          "No transcript is available for this video.",
+          false,
+          "external",
+        ),
+      };
+    }
+    if (response.status === 429) {
+      return {
+        ok: false,
+        error: error(
+          "provider_rate_limited",
+          "The external transcript provider is rate limited.",
+          true,
+          "external",
+        ),
+      };
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: error(
+          "provider_http_error",
+          `The external transcript provider returned HTTP ${response.status}.`,
+          response.status >= 500,
+          "external",
+        ),
+      };
+    }
+
     const lines = normalizeTranscriptLines(
-      typeof payload === "object" &&
-        payload !== null &&
-        "lines" in payload &&
-        Array.isArray((payload as { lines?: unknown }).lines)
-        ? (payload as { lines: unknown[] }).lines
-        : payload,
+      extractProviderLines(await response.json() as unknown),
     );
-
-    if (lines.length === 0) return { ok: false };
-    return { ok: true, lines };
-  } catch {
-    return { ok: false };
+    if (lines.length === 0) {
+      return {
+        ok: false,
+        error: error(
+          "provider_invalid_response",
+          "The external transcript provider returned no valid caption lines.",
+          true,
+          "external",
+        ),
+      };
+    }
+    return { ok: true, lines, source: "external" };
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === "TimeoutError") {
+      return {
+        ok: false,
+        error: error(
+          "provider_timeout",
+          "The external transcript provider timed out.",
+          true,
+          "external",
+        ),
+      };
+    }
+    return {
+      ok: false,
+      error: error(
+        "provider_error",
+        "The external transcript provider request failed.",
+        true,
+        "external",
+      ),
+    };
   }
+}
+
+function directProviderError(cause: unknown): TranscriptError {
+  if (
+    cause instanceof YoutubeTranscriptDisabledError
+    || cause instanceof YoutubeTranscriptNotAvailableError
+    || cause instanceof YoutubeTranscriptNotAvailableLanguageError
+    || cause instanceof YoutubeTranscriptVideoUnavailableError
+  ) {
+    return error(
+      "transcript_not_found",
+      "No transcript is available for this video.",
+      false,
+      "direct",
+    );
+  }
+  if (cause instanceof YoutubeTranscriptTooManyRequestError) {
+    return error(
+      "provider_rate_limited",
+      "YouTube rate limited the transcript request.",
+      true,
+      "direct",
+    );
+  }
+  if (cause instanceof Error && (cause.name === "AbortError" || cause.name === "TimeoutError")) {
+    return error(
+      "provider_timeout",
+      "The direct YouTube transcript request timed out.",
+      true,
+      "direct",
+    );
+  }
+  return error(
+    "provider_error",
+    "The direct YouTube transcript request failed.",
+    true,
+    "direct",
+  );
 }
 
 async function fetchTranscriptFromNodeProvider(
   videoId: string,
-): Promise<{ ok: true; lines: TranscriptLine[] } | { ok: false }> {
+): Promise<TranscriptFetchOutcome> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DIRECT_PROVIDER_TIMEOUT_MS);
+
+  const compatibleFetch: typeof fetch = (input, init) => {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("User-Agent")) headers.set("User-Agent", SERVER_FETCH_UA);
+    if (!headers.has("Accept-Language")) headers.set("Accept-Language", "en-US,en;q=0.9");
+    return fetch(input, {
+      ...init,
+      headers,
+      signal: controller.signal,
+      cache: "no-store",
+    });
+  };
+
   try {
-    const raw = await fetchTranscript(videoId, { fetch: youtubeCompatibleFetch });
-    if (!raw || raw.length === 0) return { ok: false };
+    const raw = await fetchTranscript(videoId, { fetch: compatibleFetch });
+    if (!raw?.length) {
+      return {
+        ok: false,
+        error: error(
+          "transcript_not_found",
+          "No transcript is available for this video.",
+          false,
+          "direct",
+        ),
+      };
+    }
 
-    const maxOffset = Math.max(...raw.map((e) => e.offset));
-    const isMs = maxOffset > 10_000;
-    const divisor = isMs ? 1000 : 1;
+    const durations = raw
+      .map((entry) => entry.duration)
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b);
+    const medianDuration = durations.length > 0
+      ? durations[Math.floor(durations.length / 2)]
+      : 0;
+    const divisor = medianDuration > 100 ? 1000 : 1;
+    const lines = normalizeTranscriptLines(raw.map((entry) => ({
+      text: entry.text,
+      start: entry.offset / divisor,
+      duration: entry.duration / divisor,
+    })));
 
-    const lines: TranscriptLine[] = raw.map((entry) => ({
-      text: entry.text ?? "",
-      start: (entry.offset ?? 0) / divisor,
-      duration: (entry.duration ?? 0) / divisor,
-    }));
-
-    return { ok: true, lines };
-  } catch {
-    return { ok: false };
+    if (lines.length === 0) {
+      return {
+        ok: false,
+        error: error(
+          "provider_invalid_response",
+          "YouTube returned no valid caption lines.",
+          true,
+          "direct",
+        ),
+      };
+    }
+    return { ok: true, lines, source: "direct" };
+  } catch (cause) {
+    return { ok: false, error: directProviderError(cause) };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-/**
- * Fetches caption lines for a YouTube video (shared by `/api/transcript` and session start).
- * In-process call avoids self-HTTP requests that can fail on serverless (e.g. Vercel).
- *
- * Note: YouTube frequently blocks caption requests from cloud IPs. Callers should handle
- * `{ ok: false }` and degrade gracefully (session without AI-from-transcript features).
- */
+/** Fetches normalized captions, preferring the configured external provider. */
 export async function fetchYouTubeTranscriptLines(
   videoId: string,
-): Promise<{ ok: true; lines: TranscriptLine[] } | { ok: false }> {
+): Promise<TranscriptFetchOutcome> {
   const id = videoId.trim();
-  if (!id) return { ok: false };
+  if (!YOUTUBE_VIDEO_ID.test(id)) {
+    return {
+      ok: false,
+      error: error(
+        "invalid_video_id",
+        "A valid YouTube video ID is required.",
+        false,
+        "policy",
+      ),
+    };
+  }
 
   const external = await fetchTranscriptFromExternalProvider(id);
-  if (external.ok) return external;
+  if (external?.ok) return external;
 
-  return fetchTranscriptFromNodeProvider(id);
+  if (!directFallbackAllowed()) {
+    if (external && !external.error.retryable) return external;
+    return {
+      ok: false,
+      error: error(
+        external ? "direct_fallback_disabled" : "provider_not_configured",
+        external
+          ? "The external provider failed and direct YouTube fallback is disabled."
+          : "No transcript provider is configured and direct YouTube fallback is disabled.",
+        Boolean(external),
+        "policy",
+      ),
+    };
+  }
+
+  const direct = await fetchTranscriptFromNodeProvider(id);
+  if (direct.ok) return direct;
+  if (direct.error.code === "transcript_not_found") return direct;
+  return external && !external.error.retryable ? external : direct;
 }

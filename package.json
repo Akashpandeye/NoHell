@@ -12,7 +12,10 @@
     "dev:clean": "npm run clean:all && next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:razorpay": "node tools/razorpay-checkout-contract.mjs",
+    "test:contracts": "node tools/continue-session-contract.mjs && node tools/notes-summary-contract.mjs && node tools/revision-transcript-contract.mjs",
+    "test:proxy": "python -m unittest discover -s tools/transcript-proxy/tests -v"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.0.7",

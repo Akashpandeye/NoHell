@@ -21,17 +21,45 @@ export interface RevisionCard {
   createdAt: Date;
 }
 
+/** A concept explained in an AI-generated segment recap. */
+export interface TutorialRevisionConcept {
+  name: string;
+  explanation: string;
+  whyItMatters: string;
+  example: string;
+  pitfall: string;
+}
+
+export interface TutorialRevisionRecall {
+  question: string;
+  hint: string;
+  answer: string;
+}
+
+export interface TutorialQuizOption {
+  id: string;
+  text: string;
+}
+
+export interface TutorialQuiz {
+  question: string;
+  options: TutorialQuizOption[];
+  correctOptionId: string;
+  explanation: string;
+}
+
 /** AI-generated segment recap (`/api/revision/card`). */
 export interface TutorialRevisionCard {
-  time_range: string;
-  concepts: Array<{
-    name: string;
-    what: string;
-    why: string;
-    analogy: string;
-  }>;
-  code_skeleton: string;
-  recall_question: string;
+  timeRange: string;
+  overview: string;
+  keyTakeaways: string[];
+  concepts: TutorialRevisionConcept[];
+  processSteps: string[];
+  codeSkeleton: string;
+  codeWalkthrough: string[];
+  connections: string[];
+  recall: TutorialRevisionRecall;
+  quiz?: TutorialQuiz;
 }
 
 /** Active recall prompt tied to a session. */

@@ -1,28 +1,20 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
-import { Bricolage_Grotesque, JetBrains_Mono, Syne } from "next/font/google";
+import { IBM_Plex_Mono } from "next/font/google";
 
 import { clerkAppearance } from "@/lib/clerk-appearance";
 import { OnboardingGate } from "@/components/auth/OnboardingGate";
 
 import "./globals.css";
 
-const syne = Syne({
-  variable: "--font-syne",
-  subsets: ["latin"],
-  weight: ["600", "700", "800"],
-});
-
-const bricolage = Bricolage_Grotesque({
-  variable: "--font-bricolage",
+/**
+ * Web-loaded fallback. Berkeley Mono (preferred) is resolved via local install
+ * or files in /public/fonts — see globals.css @font-face.
+ */
+const ibmPlexMono = IBM_Plex_Mono({
+  variable: "--font-ibm-plex-mono",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-jetbrains",
-  subsets: ["latin"],
-  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
@@ -47,11 +39,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${syne.variable} ${bricolage.variable} ${jetbrainsMono.variable} h-full scroll-smooth antialiased`}
+      className={`${ibmPlexMono.variable} h-full scroll-smooth antialiased`}
     >
       {/* Inline fallback colors so first paint isn’t white if CSS is late (reload / sign-out). */}
       <body
-        className="min-h-full flex flex-col bg-[#040807] font-sans text-[#ecfdf5] antialiased"
+        className="min-h-full flex flex-col bg-[#040807] font-mono text-[#ecfdf5] antialiased"
         style={{
           backgroundColor: "#040807",
           color: "#ecfdf5",

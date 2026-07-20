@@ -1,13 +1,16 @@
-import Groq from "groq-sdk";
+import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  completeWithOpenRouter,
+  isOpenRouterConfigured,
+} from "@/lib/ai/openrouter";
+import { isUuid } from "@/lib/server/authz";
 import type { Note, NoteType } from "@/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-const MODEL = "llama-3.3-70b-versatile";
 
 const SYSTEM_PROMPT =
   "You are a learning assistant for junior developers. Respond ONLY in valid JSON. No markdown.";
@@ -36,21 +39,6 @@ function parseClockToSeconds(formatted: string): number {
   return 0;
 }
 
-function parseNoteTimestamp(value: unknown, fallbackSeconds: number): number {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string") {
-    const t = value.trim();
-    if (/^\d+$/.test(t)) {
-      const n = Number.parseInt(t, 10);
-      if (Number.isFinite(n) && n >= 0) return n;
-    }
-    return parseClockToSeconds(t);
-  }
-  return fallbackSeconds;
-}
-
 function parseNotesResponseJson(text: string): unknown {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -65,6 +53,9 @@ function normalizeNoteType(raw: unknown): NoteType | null {
 }
 
 export async function POST(request: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   let body: GenerateBody;
   try {
     body = (await request.json()) as GenerateBody;
@@ -79,17 +70,20 @@ export async function POST(request: NextRequest) {
   const timestampFormatted =
     typeof body.timestamp === "string" ? body.timestamp.trim() : "";
 
-  if (!chunk || !sessionId) {
+  if (!chunk || chunk.length > 20_000 || !isUuid(sessionId)) {
     return NextResponse.json(
-      { error: "chunk and sessionId are required" },
+      { error: "A valid sessionId and a transcript chunk of up to 20,000 characters are required" },
       { status: 400 },
     );
   }
 
+  const { serverGetSessionForUser } = await import("@/lib/server-firestore");
+  const session = await serverGetSessionForUser(sessionId, userId);
+  if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+
   const baseSeconds = parseClockToSeconds(timestampFormatted);
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey?.trim()) {
+  if (!isOpenRouterConfigured()) {
     return NextResponse.json(
       { error: "AI API is not configured" },
       { status: 503 },
@@ -98,16 +92,11 @@ export async function POST(request: NextRequest) {
 
   let userLevel = "junior";
   try {
-    const { serverGetSession, serverGetUserProfile } = await import(
-      "@/lib/server-firestore"
-    );
-    const session = await serverGetSession(sessionId);
-    if (session?.userId) {
-      const profile = await serverGetUserProfile(session.userId);
-      if (profile?.profile?.level) userLevel = profile.profile.level;
-    }
+    const { serverGetUserProfile } = await import("@/lib/server-firestore");
+    const profile = await serverGetUserProfile(session.userId);
+    if (profile?.profile?.level) userLevel = profile.profile.level;
   } catch {
-    /* optional personalization */
+    /* Optional personalization must not bypass owner authorization. */
   }
 
   const userPrompt = `Extract 2-4 key learning points from this coding tutorial transcript segment.
@@ -123,29 +112,17 @@ USER LEVEL: ${userLevel}
 Adjust explanation depth accordingly.
 For beginners explain every concept from scratch with simple analogies.
 For juniors skip obvious basics and focus on nuance.
-Return ONLY: {notes:[{timestamp,type,content}]}
+Write content as concise note-style bullets separated by newlines. Do not write an essay.
+The segment starts at ${timestampFormatted || "00:00"}; do not invent timestamps.
+Return ONLY: {notes:[{type,content}]}
 If nothing valuable: {notes:[]}`;
 
   let rawNotes: Array<{ timestamp?: unknown; type?: unknown; content?: unknown }>;
   try {
-    const client = new Groq({ apiKey });
-    const completion = await client.chat.completions.create({
-      model: MODEL,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userPrompt },
-      ],
-      max_tokens: 1024,
-      temperature: 0.3,
-    });
-
-    const text = completion.choices?.[0]?.message?.content ?? "";
-    if (!text) {
-      return NextResponse.json(
-        { error: "Empty response from model" },
-        { status: 502 },
-      );
-    }
+    const text = await completeWithOpenRouter([
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ], { maxTokens: 1024, temperature: 0.3 });
 
     const parsed = parseNotesResponseJson(text) as { notes?: unknown };
     if (
@@ -178,7 +155,9 @@ If nothing valuable: {notes:[]}`;
     const type = normalizeNoteType(raw.type);
     if (!type) continue;
 
-    const timestamp = parseNoteTimestamp(raw.timestamp, baseSeconds);
+    // The model receives transcript text, not timed caption lines. The segment
+    // start is the only trustworthy timestamp for every note in this request.
+    const timestamp = baseSeconds;
 
     try {
       const id = await serverAddNote({

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getBookmarks, getNotes, getSession } from "@/lib/firestore";
 import type { Bookmark, Note, Session } from "@/types";
 
 function formatClock(totalSeconds: number): string {
@@ -110,22 +109,38 @@ export default function SessionRecapPage() {
       setLoading(true);
       setError(null);
       try {
-        const [s, n, b] = await Promise.all([
-          getSession(sessionId),
-          getNotes(sessionId),
-          getBookmarks(sessionId),
+        const [sessionRes, notesRes, bookmarksRes] = await Promise.all([
+          fetch(`/api/sessions/${encodeURIComponent(sessionId)}`),
+          fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notes`),
+          fetch(`/api/sessions/${encodeURIComponent(sessionId)}/bookmarks`),
         ]);
         if (cancelled) return;
-        if (!s) {
-          setError("Session not found");
+        if (!sessionRes.ok) {
+          setError(sessionRes.status === 404 ? "Session not found" : "Failed to load session");
           setSession(null);
           setNotes([]);
           setBookmarks([]);
           return;
         }
-        setSession(s);
-        setNotes(n);
-        setBookmarks(b);
+        const { session: rawSession } = await sessionRes.json() as { session?: Session };
+        if (!rawSession) throw new Error("Missing session");
+        setSession({
+          ...rawSession,
+          startedAt: new Date(rawSession.startedAt),
+          endedAt: rawSession.endedAt ? new Date(rawSession.endedAt) : null,
+        });
+        if (notesRes.ok) {
+          const { notes: rawNotes = [] } = await notesRes.json() as { notes?: Note[] };
+          setNotes(rawNotes.map((note) => ({ ...note, createdAt: new Date(note.createdAt) })));
+        } else {
+          setNotes([]);
+        }
+        if (bookmarksRes.ok) {
+          const { bookmarks: rawBookmarks = [] } = await bookmarksRes.json() as { bookmarks?: Bookmark[] };
+          setBookmarks(rawBookmarks.map((bookmark) => ({ ...bookmark, createdAt: new Date(bookmark.createdAt) })));
+        } else {
+          setBookmarks([]);
+        }
       } catch {
         if (!cancelled) setError("Failed to load session");
       } finally {
@@ -166,16 +181,16 @@ export default function SessionRecapPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-neutral-50 px-4">
-        <p className="text-sm text-neutral-600">Loading recap…</p>
+      <div className="flex min-h-screen items-center justify-center bg-nh-bg px-4">
+        <p className="text-sm text-nh-muted">Loading recap…</p>
       </div>
     );
   }
 
   if (error || !session || !stats) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-neutral-50 px-4">
-        <p className="text-sm text-neutral-600">{error ?? "Not found"}</p>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-nh-bg px-4">
+        <p className="text-sm text-nh-muted">{error ?? "Not found"}</p>
         <Link href="/" className="text-sm underline">
           Home
         </Link>
@@ -186,36 +201,36 @@ export default function SessionRecapPage() {
   const questions = session.recallQuestions ?? [];
 
   return (
-    <div className="min-h-screen bg-neutral-50 px-4 py-10 text-neutral-900">
+    <div className="min-h-screen bg-nh-bg px-4 py-10 text-nh-text">
       <div className="mx-auto max-w-3xl">
-        <p className="mb-1 text-xs uppercase tracking-wide text-neutral-500">
+        <p className="mb-1 text-xs uppercase tracking-wide text-nh-muted">
           Session complete
         </p>
         <h1 className="mb-2 text-xl font-semibold">{session.videoTitle}</h1>
-        <p className="mb-8 text-sm text-neutral-600">
+        <p className="mb-8 text-sm text-nh-muted">
           <span className="font-medium text-neutral-800">Goal: </span>
           {session.goal}
         </p>
 
         <div className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="border border-neutral-300 bg-white px-4 py-3 text-center">
-            <p className="text-[10px] uppercase tracking-wide text-neutral-500">
+          <div className="border border-nh-border bg-nh-surface px-4 py-3 text-center">
+            <p className="text-[10px] uppercase tracking-wide text-nh-muted">
               Time watched
             </p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">
               {stats.timeLabel}
             </p>
           </div>
-          <div className="border border-neutral-300 bg-white px-4 py-3 text-center">
-            <p className="text-[10px] uppercase tracking-wide text-neutral-500">
+          <div className="border border-nh-border bg-nh-surface px-4 py-3 text-center">
+            <p className="text-[10px] uppercase tracking-wide text-nh-muted">
               AI notes taken
             </p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">
               {stats.notesCount}
             </p>
           </div>
-          <div className="border border-neutral-300 bg-white px-4 py-3 text-center">
-            <p className="text-[10px] uppercase tracking-wide text-neutral-500">
+          <div className="border border-nh-border bg-nh-surface px-4 py-3 text-center">
+            <p className="text-[10px] uppercase tracking-wide text-nh-muted">
               Bookmarks
             </p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">
@@ -226,11 +241,11 @@ export default function SessionRecapPage() {
 
         <section className="mb-6">
           <h2 className="mb-1 text-lg font-semibold">Recall Questions</h2>
-          <p className="mb-4 text-sm text-neutral-500">
+          <p className="mb-4 text-sm text-nh-muted">
             Try to answer without looking at your notes
           </p>
           {questions.length === 0 ? (
-            <p className="text-sm text-neutral-600">
+            <p className="text-sm text-nh-muted">
               No recall questions were saved for this session.
             </p>
           ) : (
@@ -238,16 +253,16 @@ export default function SessionRecapPage() {
               {questions.map((q, index) => (
                 <li
                   key={q.id}
-                  className="border border-neutral-300 bg-white p-4 text-sm"
+                  className="border border-nh-border bg-nh-surface p-4 text-sm"
                 >
                   <div className="flex gap-3">
                     <span className="shrink-0 font-mono text-xs text-neutral-400">
                       {index + 1}.
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-neutral-900">{q.question}</p>
+                      <p className="text-nh-text">{q.question}</p>
                       {q.hint ? (
-                        <p className="mt-2 text-xs text-neutral-500">
+                        <p className="mt-2 text-xs text-nh-muted">
                           {q.hint}
                         </p>
                       ) : null}
@@ -262,14 +277,14 @@ export default function SessionRecapPage() {
         <div className="flex flex-wrap items-center gap-4 border-t border-neutral-200 pt-8">
           <button
             type="button"
-            className="border border-neutral-400 bg-white px-4 py-2 text-sm font-medium hover:bg-neutral-100"
+            className="border border-neutral-400 bg-nh-surface px-4 py-2 text-sm font-medium hover:bg-neutral-100"
             onClick={exportMarkdown}
           >
             Export
           </button>
           <Link
             href="/"
-            className="border border-transparent px-4 py-2 text-sm text-neutral-700 underline hover:text-neutral-900"
+            className="border border-transparent px-4 py-2 text-sm text-neutral-700 underline hover:text-nh-text"
           >
             Back home
           </Link>

@@ -1,4 +1,6 @@
+import { auth } from "@clerk/nextjs/server";
 import crypto from "crypto";
+import Razorpay from "razorpay";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -9,12 +11,17 @@ type Body = {
   razorpay_order_id?: string;
   razorpay_payment_id?: string;
   razorpay_signature?: string;
-  userId?: string;
 };
 
 export async function POST(request: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: "Unauthorized", status: 401 }, { status: 401 });
+  }
+
   const secret = process.env.RAZORPAY_KEY_SECRET?.trim();
-  if (!secret) {
+  const keyId = process.env.RAZORPAY_KEY_ID?.trim();
+  if (!secret || !keyId) {
     return NextResponse.json(
       { success: false, error: "Razorpay is not configured", status: 503 },
       { status: 503 },
@@ -34,13 +41,12 @@ export async function POST(request: NextRequest) {
   const orderId = body.razorpay_order_id?.trim() ?? "";
   const paymentId = body.razorpay_payment_id?.trim() ?? "";
   const signature = body.razorpay_signature?.trim() ?? "";
-  const userId = typeof body.userId === "string" ? body.userId.trim() : "";
 
-  if (!orderId || !paymentId || !signature || !userId) {
+  if (!orderId || !paymentId || !signature) {
     return NextResponse.json(
       {
         success: false,
-        error: "razorpay_order_id, razorpay_payment_id, razorpay_signature, and userId are required",
+        error: "razorpay_order_id, razorpay_payment_id, and razorpay_signature are required",
         status: 400,
       },
       { status: 400 },
@@ -53,7 +59,9 @@ export async function POST(request: NextRequest) {
     .update(payload)
     .digest("hex");
 
-  if (expectedSignature !== signature) {
+  const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+  const actualBuffer = Buffer.from(signature, "utf8");
+  if (expectedBuffer.length !== actualBuffer.length || !crypto.timingSafeEqual(expectedBuffer, actualBuffer)) {
     return NextResponse.json(
       {
         success: false,
@@ -65,6 +73,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const razorpay = new Razorpay({ key_id: keyId, key_secret: secret });
+    const order = await razorpay.orders.fetch(orderId);
+    const orderUserId = typeof order.notes?.userId === "string" ? order.notes.userId : "";
+    if (orderUserId !== userId) {
+      return NextResponse.json({ success: false, error: "Payment order not found", status: 404 }, { status: 404 });
+    }
+
     const { serverUpgradeToPro } = await import("@/lib/server-firestore");
     await serverUpgradeToPro(userId);
   } catch (e) {

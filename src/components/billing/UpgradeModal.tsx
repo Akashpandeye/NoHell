@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
 import { openRazorpayCheckout } from "@/lib/razorpay-checkout";
-import { PRO_PRICE_USD } from "@/lib/pricing";
+import { PRO_PRICE_INR } from "@/lib/pricing";
 
 type UpgradeModalProps = {
   open: boolean;
@@ -25,7 +25,6 @@ export function UpgradeModal({ open, onClose }: UpgradeModalProps) {
     setError(null);
     try {
       await openRazorpayCheckout({
-        userId: user.id,
         email: user.primaryEmailAddress?.emailAddress,
         onSuccess: () => {
           setSuccess(true);
@@ -96,7 +95,7 @@ export function UpgradeModal({ open, onClose }: UpgradeModalProps) {
             </ul>
 
             <p className="mt-5 font-mono text-lg font-semibold text-nh-text">
-              ${PRO_PRICE_USD}
+              ₹{PRO_PRICE_INR}
               <span className="text-sm font-normal text-nh-muted">/month</span>
             </p>
 

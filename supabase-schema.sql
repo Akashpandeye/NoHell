@@ -1,71 +1,341 @@
 -- ==========================================================================
--- NoHell — Supabase schema
--- Run this in the Supabase SQL Editor to create the required tables.
+-- NoHell — Supabase fresh-install schema
+-- Apply versioned files in supabase/migrations/ for an existing project.
+-- Application tables are server-only: Clerk authenticates API requests and the
+-- server service-role client performs persistence. Do not add anon policies.
 -- ==========================================================================
 
--- Users (Clerk user ID as primary key)
-create table if not exists users (
+create table if not exists public.users (
   id                       text primary key,
-  onboarding_completed     boolean   default false,
+  onboarding_completed     boolean not null default false,
   onboarding_completed_at  timestamptz,
   profile                  jsonb,
   onboarding_answers       jsonb,
-  sessions_used            integer   default 0,
-  plan                     text      default 'free',
-  created_at               timestamptz default now()
+  sessions_used            integer not null default 0 check (sessions_used >= 0),
+  plan                     text not null default 'free' check (plan in ('free', 'pro')),
+  created_at               timestamptz not null default now()
 );
 
--- Learning sessions
-create table if not exists sessions (
+create table if not exists public.sessions (
   id                   uuid primary key default gen_random_uuid(),
-  user_id              text      not null,
-  video_id             text      not null,
-  video_title          text      not null,
-  goal                 text      not null,
-  checkpoints          jsonb     default '[]'::jsonb,
+  user_id              text not null references public.users(id) on delete cascade,
+  video_id             text not null,
+  video_title          text not null,
+  goal                 text not null check (length(btrim(goal)) > 0),
+  checkpoints          jsonb not null default '[]'::jsonb,
   started_at           timestamptz not null,
   ended_at             timestamptz,
-  status               text      not null default 'active',
-  total_watch_seconds  integer   default 0,
+  status               text not null default 'active'
+                       check (status in ('active', 'paused', 'completed', 'abandoned')),
+  total_watch_seconds  integer not null default 0 check (total_watch_seconds >= 0),
   recall_questions     jsonb,
-  created_at           timestamptz default now()
+  idempotency_key      uuid,
+  created_at           timestamptz not null default now()
 );
 
--- AI-generated notes
-create table if not exists notes (
+create table if not exists public.notes (
   id          uuid primary key default gen_random_uuid(),
-  session_id  uuid      not null,
-  "timestamp" integer   not null,
-  type        text      not null,
-  content     text      not null,
-  created_at  timestamptz not null
+  session_id  uuid not null references public.sessions(id) on delete cascade,
+  "timestamp" integer not null check ("timestamp" >= 0),
+  type        text not null check (type in ('theory', 'important', 'syntax', 'logic')),
+  content     text not null check (length(btrim(content)) > 0),
+  created_at  timestamptz not null default now()
 );
 
--- User bookmarks
-create table if not exists bookmarks (
+create table if not exists public.bookmarks (
   id                uuid primary key default gen_random_uuid(),
-  session_id        uuid      not null,
-  timestamp_seconds integer   not null,
-  label             text      not null,
-  created_at        timestamptz not null
+  session_id        uuid not null references public.sessions(id) on delete cascade,
+  timestamp_seconds integer not null check (timestamp_seconds >= 0),
+  label             text not null check (length(btrim(label)) > 0),
+  created_at        timestamptz not null default now()
 );
 
--- Indexes for common queries
-create index if not exists idx_sessions_user_id    on sessions(user_id);
-create index if not exists idx_notes_session_id    on notes(session_id);
-create index if not exists idx_bookmarks_session_id on bookmarks(session_id);
+create unique index if not exists idx_sessions_user_idempotency_key
+  on public.sessions(user_id, idempotency_key)
+  where idempotency_key is not null;
+create index if not exists idx_sessions_user_created_at
+  on public.sessions(user_id, created_at desc);
+create index if not exists idx_notes_session_timestamp
+  on public.notes(session_id, "timestamp", created_at);
+create index if not exists idx_bookmarks_session_timestamp
+  on public.bookmarks(session_id, timestamp_seconds);
 
--- -------------------------------------------------------------------------
--- RLS — Auth is handled by Clerk, not Supabase Auth.
--- The policies below are permissive for development. Tighten for production
--- (e.g. verify Clerk JWT via a custom Supabase function).
--- -------------------------------------------------------------------------
-alter table users     enable row level security;
-alter table sessions  enable row level security;
-alter table notes     enable row level security;
-alter table bookmarks enable row level security;
+create or replace function public.begin_learning_session(
+  p_user_id text,
+  p_video_id text,
+  p_video_title text,
+  p_goal text,
+  p_checkpoints jsonb,
+  p_started_at timestamptz,
+  p_idempotency_key uuid
+)
+returns table (session_id uuid, outcome text)
+language plpgsql
+set search_path = public
+as $$
+declare
+  locked_user public.users%rowtype;
+  existing_id uuid;
+begin
+  insert into public.users (id) values (p_user_id)
+  on conflict (id) do nothing;
+  select * into locked_user from public.users where id = p_user_id for update;
+  select id into existing_id from public.sessions
+    where user_id = p_user_id and idempotency_key = p_idempotency_key;
+  if existing_id is not null then
+    return query select existing_id, 'existing'::text;
+    return;
+  end if;
+  if locked_user.plan <> 'pro' and locked_user.sessions_used >= 5 then
+    return query select null::uuid, 'limit_reached'::text;
+    return;
+  end if;
+  insert into public.sessions (
+    user_id, video_id, video_title, goal, checkpoints, started_at, status, total_watch_seconds, idempotency_key
+  ) values (
+    p_user_id, p_video_id, p_video_title, p_goal, coalesce(p_checkpoints, '[]'::jsonb), p_started_at,
+    'active', 0, p_idempotency_key
+  ) returning id into existing_id;
+  if locked_user.plan <> 'pro' then
+    update public.users set sessions_used = sessions_used + 1 where id = p_user_id;
+  end if;
+  return query select existing_id, 'created'::text;
+end;
+$$;
 
-create policy "Allow all on users"     on users     for all using (true) with check (true);
-create policy "Allow all on sessions"  on sessions  for all using (true) with check (true);
-create policy "Allow all on notes"     on notes     for all using (true) with check (true);
-create policy "Allow all on bookmarks" on bookmarks for all using (true) with check (true);
+revoke all on function public.begin_learning_session(text, text, text, text, jsonb, timestamptz, uuid)
+  from public, anon, authenticated;
+grant execute on function public.begin_learning_session(text, text, text, text, jsonb, timestamptz, uuid)
+  to service_role;
+
+alter table public.users enable row level security;
+alter table public.sessions enable row level security;
+alter table public.notes enable row level security;
+alter table public.bookmarks enable row level security;
+
+revoke all on table public.users from anon, authenticated;
+revoke all on table public.sessions from anon, authenticated;
+revoke all on table public.notes from anon, authenticated;
+revoke all on table public.bookmarks from anon, authenticated;
+
+-- Global transcript cache. Fetch claims and finalization are atomic so only one
+-- server request calls a provider for a video at a time.
+create table if not exists public.video_transcript_cache (
+  video_id          text primary key check (video_id ~ '^[A-Za-z0-9_-]{11}$'),
+  status            text not null check (status in ('fetching', 'ready', 'unavailable', 'failed')),
+  lines             jsonb,
+  source            text check (source in ('external', 'direct')),
+  error_code        text,
+  error_message     text,
+  error_retryable   boolean,
+  error_provider    text check (error_provider in ('external', 'direct', 'policy', 'cache')),
+  retry_after       timestamptz,
+  lease_token       uuid,
+  lease_expires_at  timestamptz,
+  attempt_count     integer not null default 0 check (attempt_count >= 0),
+  fetched_at        timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  check (
+    (status = 'fetching' and lease_token is not null and lease_expires_at is not null)
+    or (status <> 'fetching' and lease_token is null and lease_expires_at is null)
+  ),
+  check (
+    status <> 'ready'
+    or coalesce(
+      case
+        when jsonb_typeof(lines) = 'array'
+          then jsonb_array_length(lines) > 0 and source is not null
+        else false
+      end,
+      false
+    )
+  )
+);
+
+create index if not exists idx_video_transcript_cache_retry_after
+  on public.video_transcript_cache(retry_after)
+  where status in ('unavailable', 'failed');
+
+create or replace function public.claim_video_transcript(
+  p_video_id text,
+  p_force boolean,
+  p_lease_seconds integer
+)
+returns table (
+  outcome text,
+  cache_status text,
+  lines jsonb,
+  source text,
+  error_code text,
+  error_message text,
+  error_retryable boolean,
+  error_provider text,
+  retry_after timestamptz,
+  lease_token uuid,
+  fetched_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  cached public.video_transcript_cache%rowtype;
+  new_lease uuid := gen_random_uuid();
+  lease_until timestamptz := now() + make_interval(
+    secs => greatest(10, least(coalesce(p_lease_seconds, 35), 120))
+  );
+begin
+  if p_video_id is null or p_video_id !~ '^[A-Za-z0-9_-]{11}$' then
+    raise exception 'invalid video id' using errcode = '22023';
+  end if;
+
+  insert into public.video_transcript_cache (
+    video_id, status, lease_token, lease_expires_at, attempt_count
+  ) values (
+    p_video_id, 'fetching', new_lease, lease_until, 1
+  )
+  on conflict (video_id) do nothing
+  returning * into cached;
+
+  if found then
+    return query select
+      'claimed'::text, cached.status, cached.lines, cached.source,
+      cached.error_code, cached.error_message, cached.error_retryable,
+      cached.error_provider, cached.lease_expires_at, cached.lease_token,
+      cached.fetched_at, cached.updated_at;
+    return;
+  end if;
+
+  select * into cached
+  from public.video_transcript_cache as transcript_cache
+  where transcript_cache.video_id = p_video_id
+  for update;
+
+  if cached.status = 'ready' then
+    return query select
+      'cached'::text, cached.status, cached.lines, cached.source,
+      cached.error_code, cached.error_message, cached.error_retryable,
+      cached.error_provider, cached.retry_after, null::uuid,
+      cached.fetched_at, cached.updated_at;
+    return;
+  end if;
+
+  if not coalesce(p_force, false)
+     and cached.status in ('unavailable', 'failed')
+     and cached.retry_after is not null
+     and cached.retry_after > now() then
+    return query select
+      'negative'::text, cached.status, cached.lines, cached.source,
+      cached.error_code, cached.error_message, cached.error_retryable,
+      cached.error_provider, cached.retry_after, null::uuid,
+      cached.fetched_at, cached.updated_at;
+    return;
+  end if;
+
+  if cached.status = 'fetching'
+     and cached.lease_expires_at is not null
+     and cached.lease_expires_at > now() then
+    return query select
+      'busy'::text, cached.status, cached.lines, cached.source,
+      cached.error_code, cached.error_message, cached.error_retryable,
+      cached.error_provider, cached.lease_expires_at, null::uuid,
+      cached.fetched_at, cached.updated_at;
+    return;
+  end if;
+
+  update public.video_transcript_cache as transcript_cache
+  set status = 'fetching',
+      lines = null,
+      source = null,
+      error_code = null,
+      error_message = null,
+      error_retryable = null,
+      error_provider = null,
+      retry_after = null,
+      lease_token = new_lease,
+      lease_expires_at = lease_until,
+      attempt_count = transcript_cache.attempt_count + 1,
+      updated_at = now()
+  where transcript_cache.video_id = p_video_id
+  returning * into cached;
+
+  return query select
+    'claimed'::text, cached.status, cached.lines, cached.source,
+    cached.error_code, cached.error_message, cached.error_retryable,
+    cached.error_provider, cached.lease_expires_at, cached.lease_token,
+    cached.fetched_at, cached.updated_at;
+end;
+$$;
+
+create or replace function public.finalize_video_transcript(
+  p_video_id text,
+  p_lease_token uuid,
+  p_status text,
+  p_lines jsonb,
+  p_source text,
+  p_error_code text,
+  p_error_message text,
+  p_error_retryable boolean,
+  p_error_provider text,
+  p_retry_after timestamptz
+)
+returns table (updated boolean)
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  affected integer;
+begin
+  if p_status not in ('ready', 'unavailable', 'failed') then
+    raise exception 'invalid transcript status' using errcode = '22023';
+  end if;
+  if p_status = 'ready' and (
+    p_source is null
+    or p_source not in ('external', 'direct')
+    or not coalesce(
+      case
+        when jsonb_typeof(p_lines) = 'array' then jsonb_array_length(p_lines) > 0
+        else false
+      end,
+      false
+    )
+  ) then
+    raise exception 'ready transcript requires lines and source' using errcode = '22023';
+  end if;
+
+  update public.video_transcript_cache as transcript_cache
+  set status = p_status,
+      lines = case when p_status = 'ready' then p_lines else null end,
+      source = case when p_status = 'ready' then p_source else null end,
+      error_code = case when p_status = 'ready' then null else p_error_code end,
+      error_message = case when p_status = 'ready' then null else left(p_error_message, 1000) end,
+      error_retryable = case when p_status = 'ready' then null else p_error_retryable end,
+      error_provider = case when p_status = 'ready' then null else p_error_provider end,
+      retry_after = case when p_status = 'ready' then null else p_retry_after end,
+      lease_token = null,
+      lease_expires_at = null,
+      fetched_at = case when p_status = 'ready' then now() else transcript_cache.fetched_at end,
+      updated_at = now()
+  where transcript_cache.video_id = p_video_id
+    and transcript_cache.status = 'fetching'
+    and transcript_cache.lease_token = p_lease_token;
+
+  get diagnostics affected = row_count;
+  return query select affected = 1;
+end;
+$$;
+
+revoke all on table public.video_transcript_cache from public, anon, authenticated;
+grant select, insert, update, delete on table public.video_transcript_cache to service_role;
+revoke all on function public.claim_video_transcript(text, boolean, integer)
+  from public, anon, authenticated;
+grant execute on function public.claim_video_transcript(text, boolean, integer)
+  to service_role;
+revoke all on function public.finalize_video_transcript(text, uuid, text, jsonb, text, text, text, boolean, text, timestamptz)
+  from public, anon, authenticated;
+grant execute on function public.finalize_video_transcript(text, uuid, text, jsonb, text, text, text, boolean, text, timestamptz)
+  to service_role;
+alter table public.video_transcript_cache enable row level security;

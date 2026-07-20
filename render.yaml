@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: nohell-transcript-proxy
+    runtime: docker
+    plan: starter
+    dockerContext: ./tools/transcript-proxy
+    dockerfilePath: ./tools/transcript-proxy/Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: YOUTUBE_TRANSCRIPT_PROVIDER_TOKEN
+        sync: false
+      - key: YT_TRANSCRIPT_LANGUAGES
+        value: en
+      - key: YT_TRANSCRIPT_CACHE_TTL_SECONDS
+        value: "300"
+      - key: YT_TRANSCRIPT_CACHE_MAX_ENTRIES
+        value: "256"
+      - key: YT_TRANSCRIPT_RETRY_AFTER_SECONDS
+        value: "30"
+      - key: WEBSHARE_PROXY_USERNAME
+        sync: false
+      - key: WEBSHARE_PROXY_PASSWORD
+        sync: false
+      - key: WEBSHARE_FILTER_IP_LOCATIONS
+        sync: false

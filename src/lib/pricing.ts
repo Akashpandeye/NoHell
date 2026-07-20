@@ -1,7 +1,7 @@
-/** Pro plan — display and Razorpay order (USD, subunits = cents). */
-export const PRO_PRICE_USD = 9;
-export const PRO_CURRENCY = "USD" as const;
-/** $9.00 in minor units (cents) for Razorpay. */
-export const PRO_AMOUNT_MINOR_UNITS = PRO_PRICE_USD * 100;
+/** Pro plan — display and Razorpay order (INR, subunits = paise). */
+export const PRO_PRICE_INR = 599;
+export const PRO_CURRENCY = "INR" as const;
+/** ₹599.00 in minor units (paise) for Razorpay. */
+export const PRO_AMOUNT_MINOR_UNITS = PRO_PRICE_INR * 100;
 
-export const PRO_PRICE_LABEL = `$${PRO_PRICE_USD}/month`;
+export const PRO_PRICE_LABEL = `₹${PRO_PRICE_INR}/month`;

@@ -8,34 +8,36 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
 import {
-  addBookmark as persistBookmark,
-  deleteBookmark,
-  getBookmarks,
-  getNotes,
-  getSession,
-  updateBookmarkLabel,
-  updateSession,
-} from "@/lib/firestore";
-import {
-  getChunkAtSecond,
-  getCumulativeTextUpToSecond,
+  getTranscriptTextInRange,
   splitTranscriptByTime,
   type TranscriptChunk,
   type TranscriptLine,
+  type TranscriptResolution,
 } from "@/lib/transcript";
-import type { Note, NoteType, Session, TutorialRevisionCard } from "@/types";
+import { AimMark } from "@/components/brand/AimMark";
+import {
+  AiNotesSections,
+  type AiNoteDisplayRow,
+} from "@/components/session/AiNotesSections";
+import { RevisionOverlay } from "@/components/session/RevisionOverlay";
+import type { Note, Session, TutorialRevisionCard } from "@/types";
 
-type TabId = "ai" | "my" | "bookmarks";
+type TabId = "ai" | "my" | "bookmarks" | "summary";
 
-type AiNoteRow = Note & { animate?: boolean; editedContent?: string };
+type AiNoteRow = AiNoteDisplayRow;
 
-const NOTE_GENERATE_INTERVAL_MS = 30_000;
-const REVISION_CARD_INTERVAL_MS = 3 * 60 * 1000;
+type SummaryPoint = {
+  timestamp: number;
+  points: string[];
+};
+
+const NOTE_SEGMENT_SECONDS = 60;
+const REVISION_WINDOW_SECONDS = 3 * 60;
+const PLAYER_POLL_INTERVAL_MS = 500;
 
 const PANEL_MIN_W = 280;
 const PANEL_MAX_W = 600;
@@ -48,6 +50,10 @@ const YT_IFRAME_ID = "nh-session-yt-embed";
 type YTPlayerLike = {
   seekTo: (seconds: number, allowSeekAhead?: boolean) => void;
   playVideo: () => void;
+  pauseVideo: () => void;
+  getCurrentTime: () => number;
+  getDuration: () => number;
+  getPlayerState: () => number;
   destroy: () => void;
 };
 
@@ -101,25 +107,6 @@ type BookmarkItem = {
   timestampSeconds: number;
 };
 
-const NOTE_CATEGORIES: { type: NoteType; label: string; color: string }[] = [
-  { type: "theory", label: "Theory", color: "border-l-sky-400" },
-  { type: "important", label: "Important", color: "border-l-amber-400" },
-  { type: "syntax", label: "Syntax", color: "border-l-emerald-400" },
-  { type: "logic", label: "Logic", color: "border-l-violet-400" },
-];
-
-const LEGACY_TYPE_MAP: Record<string, NoteType> = {
-  concept: "theory",
-  tip: "important",
-  code: "syntax",
-  warning: "logic",
-};
-
-function normalizeNoteType(raw: string): NoteType {
-  if (raw in LEGACY_TYPE_MAP) return LEGACY_TYPE_MAP[raw]!;
-  return raw as NoteType;
-}
-
 function formatBookmarkTime(totalSeconds: number): string {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
@@ -132,6 +119,25 @@ function formatClock(totalSeconds: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function transcriptStatusMessage(
+  result: TranscriptResolution | null,
+): string | null {
+  if (!result || result.status === "ready") return null;
+  if (result.status === "fetching") {
+    return "Captions are being prepared. Video playback is available while timed learning features wait.";
+  }
+  if (result.status === "unavailable") {
+    return "This video does not have usable captions. Playback still works, but timed AI notes, summaries, and revision cards need captions.";
+  }
+  if (
+    result.error.code === "provider_not_configured" ||
+    result.error.code === "direct_fallback_disabled"
+  ) {
+    return "Production caption extraction is not configured. Connect the external transcript provider to enable timed AI notes, summaries, and revision cards.";
+  }
+  return "Captions are temporarily unavailable. Playback still works, and you can retry caption extraction.";
+}
+
 function videoDurationSec(
   session: Session | null,
   chunks: TranscriptChunk[],
@@ -139,75 +145,6 @@ function videoDurationSec(
   if (session && session.totalWatchSeconds > 0) return session.totalWatchSeconds;
   if (chunks.length > 0) return Math.max(...chunks.map((c) => c.endSec), 0);
   return 1;
-}
-
-// ---------------------------------------------------------------------------
-// Inline-editable note content
-// ---------------------------------------------------------------------------
-function EditableContent({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const ref = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (editing && ref.current) {
-      ref.current.focus();
-      ref.current.style.height = "auto";
-      ref.current.style.height = `${ref.current.scrollHeight}px`;
-    }
-  }, [editing]);
-
-  const commit = useCallback(() => {
-    setEditing(false);
-    const trimmed = draft.trim();
-    if (trimmed && trimmed !== value) onChange(trimmed);
-  }, [draft, value, onChange]);
-
-  const onKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Escape") {
-        setDraft(value);
-        setEditing(false);
-      }
-    },
-    [value],
-  );
-
-  if (editing) {
-    return (
-      <textarea
-        ref={ref}
-        className="w-full resize-none rounded border border-nh-border bg-nh-surface p-1.5 text-xs leading-relaxed text-nh-text outline-none transition-colors duration-150 focus:border-nh-teal"
-        value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          e.target.style.height = "auto";
-          e.target.style.height = `${e.target.scrollHeight}px`;
-        }}
-        onBlur={commit}
-        onKeyDown={onKeyDown}
-      />
-    );
-  }
-
-  return (
-    <p
-      className="cursor-text whitespace-pre-wrap rounded px-1.5 py-1 text-nh-text transition-colors duration-150 hover:bg-nh-surface-2"
-      onClick={() => {
-        setDraft(value);
-        setEditing(true);
-      }}
-      title="Click to edit"
-    >
-      {value}
-    </p>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -449,10 +386,15 @@ export default function SessionPage() {
     typeof params.sessionId === "string" ? params.sessionId : "";
 
   const [session, setSession] = useState<Session | null>(null);
+  const [runningSessions, setRunningSessions] = useState<Session[]>([]);
+  const [sessionsOpen, setSessionsOpen] = useState(true);
   const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>([]);
   const [transcript, setTranscript] = useState<TranscriptChunk[]>([]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [aiNotes, setAiNotes] = useState<AiNoteRow[]>([]);
+  const [summaryPoints, setSummaryPoints] = useState<SummaryPoint[]>([]);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([]);
   const [boardOpen, setBoardOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(PANEL_DEFAULT_W);
@@ -467,16 +409,18 @@ export default function SessionPage() {
   const [revisionOverlay, setRevisionOverlay] =
     useState<TutorialRevisionCard | null>(null);
   const [ending, setEnding] = useState(false);
-  const [collapsedCategories, setCollapsedCategories] = useState<
-    Record<string, boolean>
-  >({});
   const [dragging, setDragging] = useState(false);
-  const [captionNotice, setCaptionNotice] = useState(false);
+  const [transcriptOutcome, setTranscriptOutcome] =
+    useState<TranscriptResolution | null>(null);
+  const [retryingTranscript, setRetryingTranscript] = useState(false);
+  const [playerReady, setPlayerReady] = useState(false);
+  const [playerDuration, setPlayerDuration] = useState(0);
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const noteIntervalRef = useRef<number | null>(null);
-  const revisionIntervalRef = useRef<number | null>(null);
+  const playerPollRef = useRef<number | null>(null);
   const elapsedRef = useRef(0);
+  const processedNoteSegmentsRef = useRef(new Set<number>());
+  const processedRevisionWindowsRef = useRef(new Set<number>());
+  const transcriptFollowUpAttemptedRef = useRef(false);
   const revisionOverlayRef = useRef<TutorialRevisionCard | null>(null);
   const addBookmarkRef = useRef<() => void>(() => {});
   const dragStartXRef = useRef(0);
@@ -487,8 +431,8 @@ export default function SessionPage() {
   const [playerOrigin, setPlayerOrigin] = useState("");
 
   const durationSec = useMemo(
-    () => videoDurationSec(session, transcript),
-    [session, transcript],
+    () => playerDuration || videoDurationSec(session, transcript),
+    [playerDuration, session, transcript],
   );
 
   const videoIdForEmbed = session?.videoId ?? "";
@@ -548,6 +492,32 @@ export default function SessionPage() {
               if (cancelled) return;
               ytPlayerInstanceRef.current = e.target;
               ytPlayerRef.current = e.target;
+              const duration = Math.max(0, Math.floor(e.target.getDuration()));
+              const savedPosition = Math.max(
+                0,
+                Math.min(Math.floor(session.totalWatchSeconds), duration),
+              );
+              if (savedPosition > 0) {
+                for (
+                  let index = 0;
+                  index < Math.floor(savedPosition / NOTE_SEGMENT_SECONDS);
+                  index += 1
+                ) {
+                  processedNoteSegmentsRef.current.add(index);
+                }
+                for (
+                  let index = 0;
+                  index < Math.floor(savedPosition / REVISION_WINDOW_SECONDS);
+                  index += 1
+                ) {
+                  processedRevisionWindowsRef.current.add(index);
+                }
+                e.target.seekTo(savedPosition, true);
+                elapsedRef.current = savedPosition;
+                setElapsedSeconds(savedPosition);
+              }
+              setPlayerDuration(duration);
+              setPlayerReady(true);
             },
           },
         });
@@ -565,8 +535,21 @@ export default function SessionPage() {
       }
       ytPlayerInstanceRef.current = null;
       ytPlayerRef.current = null;
+      setPlayerReady(false);
+      setPlayerDuration(0);
     };
-  }, [embedSrc, loading, playerOrigin, session?.videoId]);
+  }, [embedSrc, loading, playerOrigin, session?.totalWatchSeconds, session?.videoId]);
+
+  const applyTranscriptResult = useCallback((result: TranscriptResolution) => {
+    setTranscriptOutcome(result);
+    if (result.status === "ready") {
+      setTranscriptLines(result.lines);
+      setTranscript(splitTranscriptByTime(result.lines, 5));
+      return;
+    }
+    setTranscriptLines([]);
+    setTranscript([]);
+  }, []);
 
   // ---- data load ----
   useEffect(() => {
@@ -582,51 +565,79 @@ export default function SessionPage() {
       setLoading(true);
       setLoadError(null);
       try {
-        const s = await getSession(sessionId);
-        if (cancelled) return;
-        if (!s) {
-          setLoadError("Session not found");
+        const sessionRes = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+        if (!sessionRes.ok) {
+          setLoadError(sessionRes.status === 404 ? "Session not found" : "Failed to load session");
           setSession(null);
           return;
         }
+        const { session: rawSession } = await sessionRes.json() as { session?: Session };
+        if (!rawSession) {
+          setLoadError("Session not found");
+          return;
+        }
+        const s: Session = {
+          ...rawSession,
+          startedAt: new Date(rawSession.startedAt),
+          endedAt: rawSession.endedAt ? new Date(rawSession.endedAt) : null,
+        };
         setSession(s);
 
-        const tRes = await fetch(
-          `/api/transcript?videoId=${encodeURIComponent(s.videoId)}`,
-        );
-        let chunks: TranscriptChunk[] = [];
-        let lines: TranscriptLine[] = [];
-        if (tRes.ok) {
-          lines = (await tRes.json()) as TranscriptLine[];
-          chunks = splitTranscriptByTime(lines, 5);
+        const [tRes, notesRes, bookmarksRes] = await Promise.all([
+          fetch(`/api/sessions/${encodeURIComponent(sessionId)}/transcript`),
+          fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notes`),
+          fetch(`/api/sessions/${encodeURIComponent(sessionId)}/bookmarks`),
+        ]);
+        const runningRes = await fetch("/api/sessions");
+        if (runningRes.ok) {
+          const { sessions = [] } = await runningRes.json() as { sessions?: Session[] };
+          setRunningSessions(sessions);
+        } else {
+          setRunningSessions([]);
+        }
+        let transcriptResult: TranscriptResolution;
+        try {
+          transcriptResult = (await tRes.json()) as TranscriptResolution;
+        } catch {
+          transcriptResult = {
+            status: "failed",
+            error: {
+              code: "cache_error",
+              message: "Transcript service returned an invalid response.",
+              retryable: true,
+              provider: "cache",
+            },
+            retryAfter: null,
+          };
         }
         if (cancelled) return;
-        setTranscriptLines(lines);
-        setTranscript(chunks);
+        applyTranscriptResult(transcriptResult);
 
-        let notesFromDb: AiNoteRow[] = [];
-        try {
-          const existing = await getNotes(sessionId);
-          notesFromDb = existing
-            .slice()
+        if (notesRes.ok) {
+          const { notes = [] } = await notesRes.json() as { notes?: Note[] };
+          const normalizedNotes = notes
+            .map((note) => ({ ...note, createdAt: new Date(note.createdAt) }))
             .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-        } catch {
-          notesFromDb = [];
+          for (const note of normalizedNotes) {
+            processedNoteSegmentsRef.current.add(
+              Math.floor(note.timestamp / NOTE_SEGMENT_SECONDS),
+            );
+          }
+          setAiNotes(normalizedNotes);
+        } else {
+          setAiNotes([]);
         }
-        setAiNotes(notesFromDb);
 
-        let bms: BookmarkItem[] = [];
-        try {
-          const existingBm = await getBookmarks(sessionId);
-          bms = existingBm.map((b) => ({
-            id: b.id,
-            label: b.label,
-            timestampSeconds: b.timestampSeconds,
-          }));
-        } catch {
-          bms = [];
+        if (bookmarksRes.ok) {
+          const { bookmarks: existing = [] } = await bookmarksRes.json() as { bookmarks?: Array<BookmarkItem> };
+          setBookmarks(existing.map((bookmark) => ({
+            id: bookmark.id,
+            label: bookmark.label,
+            timestampSeconds: bookmark.timestampSeconds,
+          })));
+        } else {
+          setBookmarks([]);
         }
-        setBookmarks(bms);
       } catch {
         if (!cancelled) setLoadError("Failed to load session");
       } finally {
@@ -638,135 +649,236 @@ export default function SessionPage() {
     return () => {
       cancelled = true;
     };
+  }, [applyTranscriptResult, sessionId]);
+
+  useEffect(() => {
+    transcriptFollowUpAttemptedRef.current = false;
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId || typeof window === "undefined") return;
-    try {
-      if (sessionStorage.getItem(`nh-tx-${sessionId}`) === "1") {
-        sessionStorage.removeItem(`nh-tx-${sessionId}`);
-        setCaptionNotice(true);
-      }
-    } catch {
-      /* private mode */
+    if (
+      !sessionId ||
+      transcriptOutcome?.status !== "fetching" ||
+      transcriptFollowUpAttemptedRef.current
+    ) {
+      return;
     }
-  }, [sessionId]);
+    transcriptFollowUpAttemptedRef.current = true;
+    const timeout = window.setTimeout(() => {
+      void fetch(`/api/sessions/${encodeURIComponent(sessionId)}/transcript`)
+        .then(async (response) => (await response.json()) as TranscriptResolution)
+        .then(applyTranscriptResult)
+        .catch(() => {
+          applyTranscriptResult({
+            status: "failed",
+            error: {
+              code: "cache_error",
+              message: "Transcript service is temporarily unavailable.",
+              retryable: true,
+              provider: "cache",
+            },
+            retryAfter: null,
+          });
+        });
+    }, Math.min(10_000, Math.max(1_000, transcriptOutcome.retryAfterSeconds * 1_000)));
+    return () => window.clearTimeout(timeout);
+  }, [applyTranscriptResult, sessionId, transcriptOutcome]);
+
+  const retryTranscript = useCallback(async () => {
+    if (!sessionId || retryingTranscript) return;
+    setRetryingTranscript(true);
+    try {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/transcript`,
+        { method: "POST" },
+      );
+      applyTranscriptResult((await response.json()) as TranscriptResolution);
+      transcriptFollowUpAttemptedRef.current = false;
+    } catch {
+      applyTranscriptResult({
+        status: "failed",
+        error: {
+          code: "cache_error",
+          message: "Transcript service is temporarily unavailable.",
+          retryable: true,
+          provider: "cache",
+        },
+        retryAfter: null,
+      });
+    } finally {
+      setRetryingTranscript(false);
+    }
+  }, [applyTranscriptResult, retryingTranscript, sessionId]);
 
   useEffect(() => {
     elapsedRef.current = elapsedSeconds;
   }, [elapsedSeconds]);
 
+  const persistPlaybackPosition = useCallback(() => {
+    if (!sessionId || !playerReady || !session) return;
+    if (session.status === "completed" || session.status === "abandoned") return;
+
+    const totalWatchSeconds = Math.max(0, Math.floor(elapsedRef.current));
+    if (totalWatchSeconds <= 0) return;
+
+    void fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ totalWatchSeconds }),
+      keepalive: true,
+    }).catch(() => {
+      /* A later interval or page load can retry the position. */
+    });
+  }, [playerReady, session, sessionId]);
+
+  useEffect(() => {
+    if (!session || !playerReady || session.status === "completed" || session.status === "abandoned") {
+      return;
+    }
+
+    const interval = window.setInterval(persistPlaybackPosition, 10_000);
+    window.addEventListener("pagehide", persistPlaybackPosition);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("pagehide", persistPlaybackPosition);
+    };
+  }, [persistPlaybackPosition, playerReady, session]);
+
   useEffect(() => {
     revisionOverlayRef.current = revisionOverlay;
   }, [revisionOverlay]);
 
-  // ---- timer ----
+  // ---- player-synchronised timeline and generation ----
   useEffect(() => {
-    if (loading || !session || loadError) return;
-    timerRef.current = setInterval(() => {
-      setElapsedSeconds((x) => x + 1);
-    }, 1000);
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [loading, session, loadError]);
+    if (
+      loading ||
+      !session ||
+      loadError ||
+      !sessionId ||
+      !playerReady ||
+      transcriptOutcome?.status !== "ready"
+    ) {
+      return;
+    }
+    let lastObservedSecond = -1;
 
-  // ---- auto note generation ----
-  useEffect(() => {
-    if (loading || !session || loadError || !sessionId) return;
-
-    const id = window.setInterval(() => {
-      const sec = elapsedRef.current;
-      const chunk = getChunkAtSecond(transcript, sec);
-      if (!chunk || !chunk.text.trim()) return;
-
+    const processCompletedSegment = (segmentIndex: number) => {
+      if (processedNoteSegmentsRef.current.has(segmentIndex)) return;
+      const startSec = segmentIndex * NOTE_SEGMENT_SECONDS;
+      const endSec = startSec + NOTE_SEGMENT_SECONDS;
+      const chunk = getTranscriptTextInRange(transcriptLines, startSec, endSec);
+      if (!chunk) return;
+      processedNoteSegmentsRef.current.add(segmentIndex);
       void (async () => {
         setCapturingNotes(true);
         try {
           const res = await fetch("/api/notes/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chunk: chunk.text,
-              sessionId,
-              timestamp: formatClock(sec),
-            }),
+            body: JSON.stringify({ chunk, sessionId, timestamp: formatClock(startSec) }),
           });
-          if (!res.ok) return;
-          const data = (await res.json()) as { notes?: Note[] };
+          if (!res.ok) {
+            processedNoteSegmentsRef.current.delete(segmentIndex);
+            return;
+          }
+          const data = await res.json() as { notes?: Note[] };
           const notes = Array.isArray(data.notes) ? data.notes : [];
-          if (notes.length === 0) return;
-          const rows: AiNoteRow[] = notes.map((n) => ({
-            ...n,
-            createdAt:
-              n.createdAt instanceof Date
-                ? n.createdAt
-                : new Date(String(n.createdAt)),
-            animate: true,
-          }));
-          setAiNotes((prev) => [...rows, ...prev]);
+          setAiNotes((previous) => [
+            ...notes.map((note) => ({ ...note, createdAt: new Date(note.createdAt), animate: true })),
+            ...previous,
+          ]);
         } catch {
-          /* network / parse */
+          processedNoteSegmentsRef.current.delete(segmentIndex);
         } finally {
           setCapturingNotes(false);
         }
       })();
-    }, NOTE_GENERATE_INTERVAL_MS);
-
-    noteIntervalRef.current = id;
-    return () => {
-      window.clearInterval(id);
-      noteIntervalRef.current = null;
     };
-  }, [loading, session, loadError, sessionId, transcript]);
 
-  // ---- revision card ----
-  useEffect(() => {
-    if (loading || !session || loadError || !sessionId) return;
-
-    const windowSec = Math.floor(REVISION_CARD_INTERVAL_MS / 1000);
-
-    const id = window.setInterval(() => {
-      if (revisionOverlayRef.current) return;
-
-      const sec = elapsedRef.current;
-      const cumulative = getCumulativeTextUpToSecond(transcriptLines, sec);
-      if (!cumulative.trim()) return;
-
-      const startSec = Math.max(0, sec - windowSec);
-      const timeRange = `${formatClock(startSec)} – ${formatClock(sec)}`;
-
+    const processRevisionWindow = (windowIndex: number) => {
+      if (revisionOverlayRef.current || processedRevisionWindowsRef.current.has(windowIndex)) return;
+      const startSec = windowIndex * REVISION_WINDOW_SECONDS;
+      const endSec = startSec + REVISION_WINDOW_SECONDS;
+      const text = getTranscriptTextInRange(transcriptLines, startSec, endSec);
+      if (!text) return;
+      processedRevisionWindowsRef.current.add(windowIndex);
       void (async () => {
         try {
           const res = await fetch("/api/revision/card", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              cumulativeText: cumulative,
+              cumulativeText: text,
               sessionId,
-              timeRange,
+              timeRange: `${formatClock(startSec)} – ${formatClock(endSec)}`,
             }),
           });
-          if (!res.ok) return;
-          const data = (await res.json()) as {
-            revision_card?: TutorialRevisionCard;
-          };
-          if (data.revision_card) setRevisionOverlay(data.revision_card);
+          if (!res.ok) {
+            processedRevisionWindowsRef.current.delete(windowIndex);
+            return;
+          }
+          const data = await res.json() as { revision_card?: TutorialRevisionCard };
+          if (data.revision_card) {
+            ytPlayerRef.current?.pauseVideo();
+            setRevisionOverlay(data.revision_card);
+          }
         } catch {
-          /* ignore */
+          processedRevisionWindowsRef.current.delete(windowIndex);
         }
       })();
-    }, REVISION_CARD_INTERVAL_MS);
-
-    revisionIntervalRef.current = id;
-    return () => {
-      window.clearInterval(id);
-      revisionIntervalRef.current = null;
     };
-  }, [loading, session, loadError, sessionId, transcriptLines]);
+
+    playerPollRef.current = window.setInterval(() => {
+      const player = ytPlayerRef.current;
+      if (!player || player.getPlayerState() !== 1) return;
+      const currentSecond = Math.max(0, Math.floor(player.getCurrentTime()));
+      setElapsedSeconds(currentSecond);
+
+      // A large jump indicates seek/initial buffering. Do not turn skipped video
+      // into generated notes; subsequent naturally watched windows remain eligible.
+      const jumpedForward =
+        lastObservedSecond >= 0 && currentSecond - lastObservedSecond > 3;
+      lastObservedSecond = currentSecond;
+      if (jumpedForward) {
+        for (
+          let index = 0;
+          index < Math.floor(currentSecond / NOTE_SEGMENT_SECONDS);
+          index += 1
+        ) {
+          processedNoteSegmentsRef.current.add(index);
+        }
+        for (
+          let index = 0;
+          index < Math.floor(currentSecond / REVISION_WINDOW_SECONDS);
+          index += 1
+        ) {
+          processedRevisionWindowsRef.current.add(index);
+        }
+        return;
+      }
+
+      for (let index = 0; index < Math.floor(currentSecond / NOTE_SEGMENT_SECONDS); index += 1) {
+        processCompletedSegment(index);
+      }
+      const completedWindow = Math.floor(currentSecond / REVISION_WINDOW_SECONDS) - 1;
+      if (completedWindow >= 0) processRevisionWindow(completedWindow);
+    }, PLAYER_POLL_INTERVAL_MS);
+
+    return () => {
+      if (playerPollRef.current) {
+        clearInterval(playerPollRef.current);
+        playerPollRef.current = null;
+      }
+    };
+  }, [
+    loading,
+    session,
+    loadError,
+    sessionId,
+    playerReady,
+    transcriptLines,
+    transcriptOutcome?.status,
+  ]);
 
   const checkpointPositions = useMemo(() => {
     if (!session?.checkpoints.length) return [];
@@ -791,20 +903,19 @@ export default function SessionPage() {
       const sec = elapsedRef.current;
       const label = "Revisit this";
       try {
-        const id = await persistBookmark({
-          sessionId,
-          timestampSeconds: sec,
-          label,
-          createdAt: new Date(),
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/bookmarks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ timestampSeconds: sec, label }),
         });
-        setBookmarks((prev) => [
-          ...prev,
-          { id, label, timestampSeconds: sec },
-        ]);
+        if (!res.ok) return;
+        const { bookmark } = await res.json() as { bookmark?: BookmarkItem };
+        if (!bookmark) return;
+        setBookmarks((prev) => [...prev, bookmark]);
         setBoardOpen(true);
         setActiveTab("bookmarks");
       } catch {
-        /* db error */
+        /* network error */
       }
     })();
   }, [sessionId]);
@@ -834,26 +945,32 @@ export default function SessionPage() {
   );
 
   const removeBookmark = useCallback((id: string) => {
+    if (!sessionId) return;
     void (async () => {
       try {
-        await deleteBookmark(id);
-        setBookmarks((prev) => prev.filter((b) => b.id !== id));
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/bookmarks/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (res.ok) setBookmarks((prev) => prev.filter((bookmark) => bookmark.id !== id));
       } catch {
-        /* db error */
+        /* network error */
       }
     })();
-  }, []);
+  }, [sessionId]);
 
   const renameBookmark = useCallback(async (id: string, label: string) => {
+    if (!sessionId) return;
     try {
-      await updateBookmarkLabel(id, label);
-      setBookmarks((prev) =>
-        prev.map((b) => (b.id === id ? { ...b, label } : b)),
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/bookmarks/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      if (res.ok) setBookmarks((prev) =>
+        prev.map((bookmark) => (bookmark.id === id ? { ...bookmark, label } : bookmark)),
       );
     } catch {
-      /* db error */
+      /* network error */
     }
-  }, []);
+  }, [sessionId]);
 
   useEffect(() => {
     addBookmarkRef.current = addBookmark;
@@ -881,18 +998,11 @@ export default function SessionPage() {
   }, []);
 
   const stopAllIntervals = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+    if (playerPollRef.current) {
+      clearInterval(playerPollRef.current);
+      playerPollRef.current = null;
     }
-    if (noteIntervalRef.current) {
-      clearInterval(noteIntervalRef.current);
-      noteIntervalRef.current = null;
-    }
-    if (revisionIntervalRef.current) {
-      clearInterval(revisionIntervalRef.current);
-      revisionIntervalRef.current = null;
-    }
+    ytPlayerRef.current?.pauseVideo();
   }, []);
 
   const endSession = useCallback(async () => {
@@ -901,70 +1011,75 @@ export default function SessionPage() {
     stopAllIntervals();
 
     const elapsed = elapsedRef.current;
-    const notesPayload = aiNotes.map(
-      (n) => n.editedContent ?? n.content,
-    );
 
     try {
-      await updateSession(sessionId, {
-        status: "completed",
-        endedAt: new Date(),
-        totalWatchSeconds: elapsed,
+      await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "completed",
+          endedAt: new Date().toISOString(),
+          totalWatchSeconds: elapsed,
+        }),
       });
     } catch {
-      /* still try API + redirect */
+      /* still try recall generation + redirect */
     }
 
     try {
       await fetch("/api/session/end", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          notes: notesPayload,
-          goal: session.goal,
-        }),
+        body: JSON.stringify({ sessionId }),
       });
     } catch {
       /* recap may still load session */
     }
 
     router.push(`/session/${sessionId}/recap`);
-  }, [ending, sessionId, session, aiNotes, router, stopAllIntervals]);
+  }, [ending, sessionId, session, router, stopAllIntervals]);
 
-  // ---- grouped notes by category (deduplicated) ----
-  const notesByCategory = useMemo(() => {
-    const map: Record<NoteType, AiNoteRow[]> = {
-      theory: [],
-      important: [],
-      syntax: [],
-      logic: [],
-    };
-    const seenTexts: string[] = [];
-    for (const n of aiNotes) {
-      const norm = n.content.trim().toLowerCase().replace(/\s+/g, " ");
-      const isDup = seenTexts.some(
-        (s) => s === norm || s.includes(norm) || norm.includes(s),
-      );
-      if (isDup) continue;
-      seenTexts.push(norm);
-      const t = normalizeNoteType(n.type);
-      (map[t] ??= []).push(n);
+  const watchedTranscript = useMemo(
+    () => transcriptLines
+      .filter((line) => line.start <= elapsedSeconds)
+      .sort((a, b) => a.start - b.start)
+      .map((line) => `[${formatClock(line.start)}] ${line.text.trim()}`)
+      .filter((line) => line.length > 8)
+      .join("\n"),
+    [elapsedSeconds, transcriptLines],
+  );
+
+  const summarizeWatchedContent = useCallback(async () => {
+    if (!sessionId || !watchedTranscript || summarizing) return;
+    setSummarizing(true);
+    setSummaryError(null);
+    try {
+      const res = await fetch("/api/session/summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, transcript: watchedTranscript }),
+      });
+      const data = await res.json() as { summary?: SummaryPoint[]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not summarize this session");
+      setSummaryPoints(Array.isArray(data.summary) ? data.summary : []);
+    } catch (error) {
+      setSummaryError(error instanceof Error ? error.message : "Could not summarize this session");
+    } finally {
+      setSummarizing(false);
     }
-    return map;
-  }, [aiNotes]);
+  }, [sessionId, summarizing, watchedTranscript]);
 
   const updateNoteContent = useCallback((noteId: string, content: string) => {
-    setAiNotes((prev) =>
-      prev.map((n) =>
-        n.id === noteId ? { ...n, editedContent: content } : n,
-      ),
-    );
-  }, []);
-
-  const toggleCategory = useCallback((type: string) => {
-    setCollapsedCategories((prev) => ({ ...prev, [type]: !prev[type] }));
-  }, []);
+    if (!sessionId) return;
+    setAiNotes((prev) => prev.map((note) =>
+      note.id === noteId ? { ...note, content, editedContent: undefined } : note,
+    ));
+    void fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notes/${encodeURIComponent(noteId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+  }, [sessionId]);
 
   // ---- renders ----
 
@@ -995,6 +1110,9 @@ export default function SessionPage() {
 
   const videoId = session.videoId;
   const youtubeUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+  const transcriptMessage = transcriptStatusMessage(transcriptOutcome);
+  const transcriptCanRetry =
+    transcriptOutcome?.status === "failed" && transcriptOutcome.error.retryable;
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-nh-bg text-nh-text">
@@ -1005,90 +1123,24 @@ export default function SessionPage() {
 
       {/* ---- Revision overlay ---- */}
       {revisionOverlay ? (
-        <div
-          className="absolute inset-0 z-[100] flex flex-col bg-neutral-950/88 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="revision-time-range"
-        >
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
-            <header className="mb-6 border-b border-nh-border pb-3">
-              <p className="text-[10px] uppercase tracking-wider text-nh-dim">
-                Revision card
-              </p>
-              <h2
-                id="revision-time-range"
-                className="font-mono text-lg text-nh-text"
-              >
-                {revisionOverlay.time_range}
-              </h2>
-            </header>
-
-            <section className="mb-6 space-y-3">
-              <h3 className="text-xs font-semibold text-nh-muted">Concepts</h3>
-              <ul className="space-y-3">
-                {revisionOverlay.concepts.map((c, i) => (
-                  <li
-                    key={`${c.name}-${i}`}
-                    className="rounded-xl border border-nh-border bg-nh-surface p-4 text-sm text-nh-text"
-                  >
-                    <p className="mb-2 font-semibold">{c.name}</p>
-                    <p className="mb-1 text-nh-muted">
-                      <span className="text-nh-dim">What: </span>
-                      {c.what}
-                    </p>
-                    <p className="mb-1 text-nh-muted">
-                      <span className="text-nh-dim">Why: </span>
-                      {c.why}
-                    </p>
-                    {c.analogy ? (
-                      <p className="italic text-nh-dim">{c.analogy}</p>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </section>
-
-            {revisionOverlay.code_skeleton.trim() ? (
-              <section className="mb-6">
-                <h3 className="mb-2 text-xs font-semibold text-nh-muted">
-                  Code skeleton
-                </h3>
-                <pre className="overflow-x-auto rounded-xl border border-nh-border bg-nh-surface p-4 font-mono text-xs leading-relaxed text-nh-text">
-                  {revisionOverlay.code_skeleton}
-                </pre>
-              </section>
-            ) : null}
-
-            <section className="mb-8 border-t border-nh-border pt-4">
-              <h3 className="mb-2 text-xs font-semibold text-nh-muted">
-                Recall
-              </h3>
-              <p className="text-sm text-nh-text">
-                {revisionOverlay.recall_question}
-              </p>
-            </section>
-          </div>
-
-          <div className="shrink-0 border-t border-nh-border bg-nh-bg/90 px-4 py-4 sm:px-8">
-            <button
-              type="button"
-              className="w-full cursor-pointer rounded-xl bg-nh-cta px-4 py-3 text-sm font-bold text-neutral-950 shadow-sm transition-colors duration-200 hover:bg-nh-cta-hover"
-              onClick={() => setRevisionOverlay(null)}
-            >
-              Resume Video
-            </button>
-          </div>
-        </div>
+        <RevisionOverlay
+          card={revisionOverlay}
+          onResume={() => {
+            setRevisionOverlay(null);
+            ytPlayerRef.current?.playVideo();
+          }}
+        />
       ) : null}
 
       {/* ---- TOP BAR ---- */}
       <header className="flex h-[50px] min-h-[50px] shrink-0 items-center border-b border-nh-border px-3">
         <Link
           href="/"
-          className="shrink-0 cursor-pointer text-sm font-semibold text-nh-text transition-colors duration-200 hover:text-nh-teal"
+          aria-label="NoHell home"
+          className="group flex shrink-0 cursor-pointer items-center gap-2 text-sm font-semibold text-nh-text transition-colors duration-200 hover:text-nh-teal"
         >
-          NoHell
+          <AimMark className="h-6 w-6 shrink-0 text-nh-cta transition-transform duration-300 group-hover:scale-105" />
+          <span className="font-display tracking-[-0.03em]">NoHell</span>
         </Link>
 
         <div className="flex flex-1 items-center justify-center px-4">
@@ -1151,24 +1203,94 @@ export default function SessionPage() {
       </header>
 
       {/* ---- MAIN AREA ---- */}
-      <div className="flex min-h-0 flex-1">
-        {/* Video area */}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-          {captionNotice ? (
-            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-amber-500/35 bg-amber-500/10 px-4 py-2.5">
-              <p className="min-w-0 text-xs leading-relaxed text-amber-100/95">
-                YouTube captions couldn&apos;t be loaded from this server (YouTube
-                often blocks caption requests from cloud hosts like Vercel). The
-                embed still works; timed AI notes and revision cards need captions
-                and stay off until a transcript can be fetched.
-              </p>
+      <div className="relative flex min-h-0 flex-1">
+        {runningSessions.length > 0 && !sessionsOpen ? (
+          <button
+            type="button"
+            onClick={() => setSessionsOpen(true)}
+            aria-label="Show your sessions"
+            aria-expanded={false}
+            title="Your sessions"
+            className="flex w-10 min-w-10 shrink-0 cursor-pointer flex-col items-center justify-center gap-1.5 border-r border-nh-teal/30 bg-nh-teal/5 text-nh-teal transition-colors duration-200 hover:bg-nh-teal/10 hover:text-nh-text"
+          >
+            <span aria-hidden>📖</span>
+          </button>
+        ) : null}
+
+        {runningSessions.length > 0 && sessionsOpen ? (
+          <aside className="hidden w-60 min-w-60 shrink-0 flex-col border-r border-nh-border bg-nh-bg md:flex">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-nh-border px-3 py-3">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-nh-dim">
+                  Your sessions
+                </p>
+                <p className="mt-1 text-xs text-nh-muted">
+                  Switch without losing your notes.
+                </p>
+              </div>
               <button
                 type="button"
-                className="shrink-0 cursor-pointer rounded-lg border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-100 transition-colors duration-200 hover:bg-amber-500/20"
-                onClick={() => setCaptionNotice(false)}
+                onClick={() => setSessionsOpen(false)}
+                aria-label="Hide your sessions"
+                aria-expanded={true}
+                title="Hide your sessions"
+                className="flex size-8 shrink-0 items-center justify-center rounded-md text-base transition-colors hover:bg-nh-surface"
               >
-                Dismiss
+                <span aria-hidden>📖</span>
               </button>
+            </div>
+            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2" aria-label="Your active sessions">
+              {runningSessions.map((item) => {
+                const selected = item.id === session.id;
+                return (
+                  <Link
+                    key={item.id}
+                    href={`/session/${item.id}`}
+                    aria-current={selected ? "page" : undefined}
+                    className={`block rounded-xl border p-3 transition-colors hover:border-nh-teal/50 ${
+                      selected
+                        ? "border-nh-teal/40 bg-nh-teal/5"
+                        : "border-transparent hover:bg-nh-surface"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${item.status === "active" ? "bg-nh-teal" : "bg-nh-dim"}`} />
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-semibold text-nh-text">
+                          {item.videoTitle}
+                        </p>
+                        <p className="mt-1 truncate text-[10px] text-nh-muted">
+                          {item.goal}
+                        </p>
+                        <p className="mt-2 font-mono text-[10px] tabular-nums text-nh-dim">
+                          {item.status === "active" ? "Watching" : "Paused"} · {formatClock(item.totalWatchSeconds)}
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </nav>
+          </aside>
+        ) : null}
+
+        {/* Video area */}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {transcriptMessage ? (
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-amber-500/35 bg-amber-500/10 px-4 py-2.5">
+              <p className="min-w-0 text-xs leading-relaxed text-amber-100/95">
+                {transcriptMessage}
+              </p>
+              {transcriptCanRetry ? (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer rounded-lg border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-100 transition-colors duration-200 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void retryTranscript()}
+                  disabled={retryingTranscript}
+                >
+                  {retryingTranscript ? "Retrying…" : "Retry captions"}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {/* Goal bar */}
@@ -1266,6 +1388,7 @@ export default function SessionPage() {
                     ["ai", "AI Notes"],
                     ["my", "My Notes"],
                     ["bookmarks", "Bookmarks"],
+                    ["summary", "Summary"],
                   ] as const
                 ).map(([id, label]) => (
                   <button
@@ -1287,6 +1410,11 @@ export default function SessionPage() {
                     {id === "bookmarks" && bookmarks.length > 0 ? (
                       <span className="ml-1 text-[10px] text-nh-dim">
                         {bookmarks.length}
+                      </span>
+                    ) : null}
+                    {id === "summary" && summaryPoints.length > 0 ? (
+                      <span className="ml-1 text-[10px] text-nh-dim">
+                        {summaryPoints.length}
                       </span>
                     ) : null}
                   </button>
@@ -1324,75 +1452,22 @@ export default function SessionPage() {
 
             {/* Tab content */}
             <div className="min-h-0 flex-1 overflow-hidden">
-              {/* ---- AI NOTES (categorized) ---- */}
+              {/* ---- AI NOTES ---- */}
               {activeTab === "ai" && (
-                <div className="h-full overflow-y-auto p-3">
-                  {NOTE_CATEGORIES.map(({ type, label, color }) => {
-                    const notes = notesByCategory[type];
-                    if (!notes || notes.length === 0) return null;
-                    const collapsed = !!collapsedCategories[type];
-                    return (
-                      <div key={type} className="mb-4">
-                        <button
-                          type="button"
-                          className="mb-2 flex w-full cursor-pointer items-center gap-2 text-left transition-colors duration-150 hover:text-nh-text"
-                          onClick={() => toggleCategory(type)}
-                        >
-                          <span className="text-[10px] text-nh-dim">
-                            {collapsed ? "▸" : "▾"}
-                          </span>
-                          <span className="text-[11px] font-bold uppercase tracking-widest text-nh-muted">
-                            {label}
-                          </span>
-                          <span className="text-[10px] text-nh-dim">
-                            ({notes.length})
-                          </span>
-                        </button>
-                        {!collapsed && (
-                          <ul className="space-y-2">
-                            {notes.map((note) => (
-                              <li
-                                key={note.id}
-                                className={`rounded-xl border border-nh-border border-l-2 ${color} bg-nh-surface p-2.5 text-xs ${
-                                  note.animate ? "nh-ai-note-enter" : ""
-                                }`}
-                                onAnimationEnd={() => {
-                                  if (!note.animate) return;
-                                  setAiNotes((prev) =>
-                                    prev.map((n) =>
-                                      n.id === note.id
-                                        ? { ...n, animate: undefined }
-                                        : n,
-                                    ),
-                                  );
-                                }}
-                              >
-                                <div className="mb-1.5 flex items-center justify-between gap-2">
-                                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-nh-dim">
-                                    {formatClock(note.timestamp)}
-                                  </span>
-                                </div>
-                                <EditableContent
-                                  value={
-                                    note.editedContent ?? note.content
-                                  }
-                                  onChange={(v) =>
-                                    updateNoteContent(note.id, v)
-                                  }
-                                />
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
+                <AiNotesSections
+                  notes={aiNotes}
+                  onSeek={seekToBookmark}
+                  onUpdateNote={updateNoteContent}
+                  onAnimationComplete={(noteId) => {
+                    setAiNotes((previous) =>
+                      previous.map((note) =>
+                        note.id === noteId
+                          ? { ...note, animate: undefined }
+                          : note,
+                      ),
                     );
-                  })}
-                  {aiNotes.length === 0 && (
-                    <p className="py-8 text-center text-xs text-nh-dim">
-                      Notes will appear here as you watch.
-                    </p>
-                  )}
-                </div>
+                  }}
+                />
               )}
 
               {/* ---- MY NOTES ---- */}
@@ -1423,6 +1498,66 @@ export default function SessionPage() {
                     </p>
                   )}
                 </ul>
+              )}
+
+              {/* ---- SUMMARY ---- */}
+              {activeTab === "summary" && (
+                <div className="h-full overflow-y-auto p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-nh-text">
+                        Watched so far
+                      </p>
+                      <p className="mt-1 text-[10px] text-nh-dim">
+                        Timestamped notes from the current video progress.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="shrink-0 cursor-pointer rounded-lg bg-nh-cta px-3 py-2 text-[11px] font-bold text-neutral-950 transition-colors hover:bg-nh-cta-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => void summarizeWatchedContent()}
+                      disabled={
+                        summarizing ||
+                        transcriptOutcome?.status !== "ready" ||
+                        !watchedTranscript
+                      }
+                    >
+                      {summarizing ? "Summarizing…" : summaryPoints.length > 0 ? "Refresh" : "Summarize"}
+                    </button>
+                  </div>
+
+                  {summaryError ? (
+                    <p className="mb-3 rounded-lg border border-orange-500/30 bg-orange-500/10 p-2.5 text-xs text-orange-200">
+                      {summaryError}
+                    </p>
+                  ) : null}
+
+                  {summaryPoints.length > 0 ? (
+                    <div className="space-y-2">
+                      {summaryPoints.map((item, index) => (
+                        <article
+                          key={`${item.timestamp}-${index}`}
+                          className="rounded-xl border border-nh-border border-l-2 border-l-nh-teal bg-nh-surface p-3"
+                        >
+                          <p className="mb-2 font-mono text-[10px] tabular-nums text-nh-teal">
+                            {formatClock(item.timestamp)}
+                          </p>
+                          <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-nh-text">
+                            {item.points.map((point) => (
+                              <li key={point}>{point}</li>
+                            ))}
+                          </ul>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="py-10 text-center text-xs leading-relaxed text-nh-dim">
+                      {transcriptOutcome?.status === "ready"
+                        ? "Watch a little, then summarize what you have covered."
+                        : "A transcript is required before this summary can be generated."}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </aside>

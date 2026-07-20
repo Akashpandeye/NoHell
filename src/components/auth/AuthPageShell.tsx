@@ -58,7 +58,7 @@ export function AuthPageShell({
             <h1 className="font-display text-[1.75rem] font-extrabold leading-tight tracking-[-0.04em] text-nh-text sm:text-3xl">
               {title}
             </h1>
-            <p className="mx-auto mt-2 max-w-sm font-mono text-xs leading-relaxed text-[#c9aa8c] sm:text-[13px]">
+            <p className="mx-auto mt-2 max-w-sm font-mono text-xs leading-relaxed text-nh-muted sm:text-[13px]">
               {subtitle}
             </p>
           </div>
